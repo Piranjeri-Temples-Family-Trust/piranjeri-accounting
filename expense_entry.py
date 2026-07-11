@@ -427,75 +427,72 @@ def render_expense_entry(user: str):
     # TAB 1 — New Expense
     # ═══════════════════════════════════════════════════════════
     with tabs[0]:
-        # ── Transfer prefill from hint-button click ──────────────
+        # ── Prefill amount from hint-button click ────────────────
         if "_pf_amount" in st.session_state:
-            st.session_state["exp_amount"] = float(st.session_state.pop("_pf_amount"))
-        if "_pf_mh_id" in st.session_state:
-            st.session_state["exp_mh_id"]  = st.session_state.pop("_pf_mh_id")
+            st.session_state["ne_amount"] = float(st.session_state.pop("_pf_amount"))
 
         st.markdown("#### 🧾 Record Expense")
-        with st.form("exp_form", clear_on_submit=True):
-            c1,c2,c3,c4 = st.columns([1.1,0.9,1.4,1.4])
-            with c1:
-                txn_date = st.date_input("Date", value=date.today(), max_value=date.today())
-                st.caption(f"FY {_fy(txn_date)}")
-            with c2:
-                mode = st.selectbox("Mode", ["CASH","CHEQUE","BANK_TRANSFER"],
-                    format_func=lambda x:{"CASH":"Cash","CHEQUE":"Cheque","BANK_TRANSFER":"Bank Tfr"}[x])
-            with c3:
-                fs_opts = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
-                fs_id = st.selectbox("Fund", list(fs_opts), format_func=lambda x: fs_opts[x],
-                                     key="exp_fs_id")
-            with c4:
-                ff = [f for f in fest_list if f["fund_source_id"]==fs_id]
-                fo = {None:"— General —"} | {f["id"]: f["name"] for f in ff}
-                fest_id = st.selectbox("Festival", list(fo), format_func=lambda x: fo[x],
-                                       key="exp_fest_id")
 
-            c5,c6 = st.columns([2,1])
-            with c5:
-                mh_opts = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
-                mh_id = st.selectbox("Head", list(mh_opts), format_func=lambda x: mh_opts[x],
-                                     key="exp_mh_id")
-            with c6:
-                amount = st.number_input("Amount (₹)", min_value=1.0, max_value=500000.0,
-                    step=50.0, format="%.2f", key="exp_amount")
+        # Row 1 — Date / Mode / Fund / Festival
+        c1,c2,c3,c4 = st.columns([1.1,0.9,1.4,1.4])
+        with c1:
+            txn_date = st.date_input("Date", value=date.today(), max_value=date.today(), key="ne_date")
+            st.caption(f"FY {_fy(txn_date)}")
+        with c2:
+            mode = st.selectbox("Mode", ["CASH","CHEQUE","BANK_TRANSFER"],
+                format_func=lambda x:{"CASH":"Cash","CHEQUE":"Cheque","BANK_TRANSFER":"Bank Tfr"}[x],
+                key="ne_mode")
+        with c3:
+            fs_opts = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
+            fs_id = st.selectbox("Fund", list(fs_opts), format_func=lambda x: fs_opts[x], key="ne_fs")
+        with c4:
+            ff = [f for f in fest_list if f["fund_source_id"]==fs_id]
+            fo = {None:"— General —"} | {f["id"]: f["name"] for f in ff}
+            fest_id = st.selectbox("Festival", list(fo), format_func=lambda x: fo[x], key="ne_fest")
 
-            c8,c9,c10 = st.columns([1,1.5,1.5])
-            cheque_no = utr = None
-            with c8:
-                if mode=="CHEQUE":    cheque_no = st.text_input("Cheque No.", max_chars=30) or None
-                elif mode=="BANK_TRANSFER": utr = st.text_input("UTR Ref.", max_chars=40) or None
-                else: st.empty()
-            with c9:  desc    = st.text_input("Description", max_chars=50, placeholder="e.g. April flowers NPK") or None
-            with c10: paid_to = st.text_input("Paid To",     max_chars=50, placeholder="e.g. Subramania Pillai") or None
+        # Row 2 — Head / Amount
+        c5,c6 = st.columns([2,1])
+        with c5:
+            mh_opts = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
+            mh_id = st.selectbox("Head", list(mh_opts), format_func=lambda x: mh_opts[x], key="ne_mh")
+        with c6:
+            amount = st.number_input("Amount (₹)", min_value=1.0, max_value=500000.0,
+                step=50.0, format="%.2f", key="ne_amount")
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            ok = st.form_submit_button("💾 Save Expense", type="primary")
+        # Row 3 — Clickable standing-amount hints (live, updates on every Head change)
+        hint_matches = [s for s in sa_list
+                        if s["major_head_id"] == mh_id
+                        and (fest_id is None or s["festival_id"] is None
+                             or s["festival_id"] == fest_id)]
+        if hint_matches:
+            st.markdown('<p style="font-size:.78rem;color:#475569;margin:4px 0 2px">📌 Usual amounts — click to apply</p>',
+                        unsafe_allow_html=True)
+            hcols = st.columns(min(len(hint_matches), 4))
+            for i, s in enumerate(hint_matches[:4]):
+                with hcols[i]:
+                    if st.button(f"₹{s['default_amount']:,.0f}  {s['description']}",
+                                 key=f"sa_h_{s['major_head_id']}_{s.get('festival_id','g')}_{i}",
+                                 use_container_width=True):
+                        st.session_state["ne_amount"] = float(s["default_amount"])
+                        st.rerun()
 
-        # ── Clickable standing-amount hints (outside form) ────────
-        cur_mh_id   = st.session_state.get("exp_mh_id")
-        cur_fest_id = st.session_state.get("exp_fest_id")
-        if cur_mh_id:
-            hint_matches = [s for s in sa_list
-                            if s["major_head_id"] == cur_mh_id
-                            and (cur_fest_id is None or s["festival_id"] is None
-                                 or s["festival_id"] == cur_fest_id)]
-            if hint_matches:
-                st.markdown("**📌 Usual amounts — click to apply:**")
-                hcols = st.columns(min(len(hint_matches), 4))
-                for i, s in enumerate(hint_matches[:4]):
-                    with hcols[i]:
-                        if st.button(
-                            f"₹{s['default_amount']:,.0f}\n{s['description']}",
-                            key=f"sa_hint_{s['major_head_id']}_{s.get('festival_id','g')}_{i}",
-                            use_container_width=True,
-                        ):
-                            st.session_state["_pf_amount"] = s["default_amount"]
-                            st.session_state["_pf_mh_id"]  = cur_mh_id
-                            st.rerun()
+        # Row 4 — Cheque / Description / Paid To
+        c8,c9,c10 = st.columns([1,1.5,1.5])
+        cheque_no = utr = None
+        with c8:
+            if mode=="CHEQUE":
+                cheque_no = st.text_input("Cheque No.", max_chars=30, key="ne_chq") or None
+            elif mode=="BANK_TRANSFER":
+                utr = st.text_input("UTR Ref.", max_chars=40, key="ne_utr") or None
+            else:
+                st.empty()
+        with c9:
+            desc    = st.text_input("Description", max_chars=50, placeholder="e.g. April flowers NPK",  key="ne_desc") or None
+        with c10:
+            paid_to = st.text_input("Paid To",     max_chars=50, placeholder="e.g. Subramania Pillai", key="ne_paid") or None
 
-        if ok:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("💾 Save Expense", type="primary", key="ne_save"):
             errs = []
             if mode=="CHEQUE" and not cheque_no: errs.append("Cheque number required.")
             if mode=="BANK_TRANSFER" and not utr: errs.append("UTR required.")
@@ -508,7 +505,11 @@ def render_expense_entry(user: str):
                         "payment_mode":mode,"cheque_no":cheque_no,"utr_ref_no":utr,
                         "description":desc,"paid_to":paid_to,"entered_by":user})
                     st.success(f"✅ Saved #{nid} · ₹{amount:,.2f} · {mh_opts[mh_id]}")
+                    for k in ["ne_date","ne_mode","ne_fs","ne_fest","ne_mh",
+                              "ne_amount","ne_chq","ne_utr","ne_desc","ne_paid"]:
+                        st.session_state.pop(k, None)
                     st.cache_data.clear()
+                    st.rerun()
                 except Exception as ex:
                     st.error(f"Save failed: {ex}")
 
