@@ -915,7 +915,7 @@ def render_expense_entry(user: str):
                         "₹": r["amount"], "Mode": r["payment_mode"],
                         "Description": (r["description"] or "")[:40],
                     } for r in ok_rows[:20]])
-                    st.dataframe(preview, width='stretch', hide_index=True)
+                    st.dataframe(preview, hide_index=True)
 
                 if warn_rows:
                     st.markdown("**⚠️ Rows needing manual head assignment**")
@@ -943,7 +943,7 @@ def render_expense_entry(user: str):
                     adv_df = [{"Date":a["txn_date"],"₹":a["amount"],
                                "Mode":a["payment_mode"],"Ref":a["cheque_no"] or "",
                                "Description":a["description"]} for a in advances]
-                    st.dataframe(adv_df, width='stretch', hide_index=True)
+                    st.dataframe(adv_df, hide_index=True)
 
                 st.markdown("---")
                 bcol1, bcol2 = st.columns(2)
@@ -992,7 +992,7 @@ def render_expense_entry(user: str):
                     st.dataframe(pd.DataFrame([
                         {"Fund": k, "₹ Total": f"{v:,.0f}"}
                         for k, v in sorted(fund_totals.items())
-                    ]), width='stretch', hide_index=True)
+                    ]), hide_index=True)
 
                 # Preview first 30 rows
                 if rec_rows:
@@ -1007,7 +1007,7 @@ def render_expense_entry(user: str):
                         "Mode":    r["payment_mode"],
                         "Type":    r["income_type"],
                     } for r in rec_rows[:30]])
-                    st.dataframe(prev, width='stretch', hide_index=True)
+                    st.dataframe(prev, hide_index=True)
 
                 if rec_skipped:
                     with st.expander(f"Skipped rows ({len(rec_skipped)})"):
@@ -1043,7 +1043,7 @@ def render_expense_entry(user: str):
                         "Item": i["description"],
                         "₹ Default": f"{i['default_amount']:,.2f}",
                         "Notes": i["notes"] or "",
-                    } for i in items]), width='stretch', hide_index=True)
+                    } for i in items]), hide_index=True)
 
     # ═══════════════════════════════════════════════════════════
     # TAB 5 — Recent Entries
@@ -1108,7 +1108,7 @@ def render_expense_entry(user: str):
                     "Expenses ₹": f"{r['expenses']:,.2f}",
                     "Balance ₹": f"{r['balance']:,.2f}",
                 } for r in rows_f])
-                st.dataframe(df_f, width='stretch', hide_index=True)
+                st.dataframe(df_f, hide_index=True)
                 tot_inc = sum(r["income"]   for r in rows_f)
                 tot_exp = sum(r["expenses"] for r in rows_f)
                 bal     = tot_inc - tot_exp
@@ -1139,7 +1139,7 @@ def render_expense_entry(user: str):
                     "Expenses ₹": f"{r['expenses']:,.2f}",
                     "Balance ₹":  f"{r['balance']:,.2f}",
                 } for r in rows_fv])
-                st.dataframe(df_fv, width='stretch', hide_index=True)
+                st.dataframe(df_fv, hide_index=True)
 
         # ── Cash Book ───────────────────────────────────────────
         else:
@@ -1181,7 +1181,7 @@ def render_expense_entry(user: str):
                             "Expense":     f"{exp:,.2f}" if exp else "",
                             "Balance":     f"{running:,.2f}",
                         })
-                    st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
+                    st.dataframe(pd.DataFrame(table_rows), hide_index=True)
                     st.caption(f"{len(cb_rows)} transactions")
 
     # ===========================================================
@@ -1226,7 +1226,7 @@ def render_expense_entry(user: str):
                     "Desc":   (r.get("description") or "")[:40],
                     "Cheque": r.get("cheque_no") or "",
                 } for r in results_ev])
-                st.dataframe(preview_ev, width='stretch', hide_index=True)
+                st.dataframe(preview_ev, hide_index=True)
                 st.caption(f"{len(results_ev)} entries found")
 
                 id_label = {
