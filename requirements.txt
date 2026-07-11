@@ -2,3 +2,4 @@ streamlit
 pg8000
 pandas
 openpyxl
+watchdog<6.0
