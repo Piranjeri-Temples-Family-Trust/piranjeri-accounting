@@ -1,4 +1,4 @@
 streamlit
-psycopg[binary]
+pg8000
 pandas
 openpyxl
