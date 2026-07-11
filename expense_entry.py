@@ -320,6 +320,120 @@ def _bulk_insert_expenses(rows: list, user: str) -> int:
             count += 1
     return count
 
+# ── Receipts (income) import helpers ──────────────────────────────────────────
+
+# RECEIPTS sheet fund column → (fund_source_code, festival_code, income_type)
+RECEIPT_FUND_COLS = [
+    ("NPK",    "NPK_DAILY",    "DONATION"),   # col index 9
+    ("PRO",    "PRO",          "DONATION"),   # 10
+    ("NPK",    "AADI_POORAM",  "DONATION"),   # 11  (AADI PURAM column)
+    ("GSS",    "GSS",          "DONATION"),   # 12
+    ("VARU",   "VARU",         "DONATION"),   # 13
+    ("PANGUNI","PANGUNI",      "DONATION"),   # 14  (PANGU column)
+    ("RENOV",  "RENOV",        "DONATION"),   # 15  (RENO column)
+    ("NPK",    None,           "INTEREST"),   # 16  (BANK INT)
+    (None,     None,           "OTHER"),      # 17  (OTHERS)
+]
+
+def _parse_receipts_excel(file, fs_by_code: dict, fest_by_code: dict) -> tuple:
+    """Returns (rows, skipped) for the RECEIPTS sheet."""
+    import pandas as pd, math
+
+    df = pd.read_excel(file, sheet_name="RECEIPTS", header=10, engine="openpyxl")
+    col_names = ["book_no","rec_no","day","month","year","name",
+                 "amount","bank","cash",
+                 "NPK","PRADO","AADI_PURAM","GSS","VARU","PANGU","RENO",
+                 "BANK_INT","OTHERS"]
+    df = df.iloc[:, :len(col_names)]
+    df.columns = col_names[:df.shape[1]]
+
+    FUND_COLS = ["NPK","PRADO","AADI_PURAM","GSS","VARU","PANGU","RENO","BANK_INT","OTHERS"]
+
+    rows, skipped = [], []
+    last_book = None
+
+    for _, row in df.iterrows():
+        def val(col):
+            v = row.get(col)
+            return None if (v is None or (isinstance(v, float) and math.isnan(v))) else v
+
+        if val("book_no"): last_book = int(val("book_no"))
+
+        name = str(val("name") or "").strip()
+        if not name or name.upper() in ("NAME","CANCELLED",""):
+            continue
+
+        rec_no = val("rec_no")
+        day = val("day"); month = val("month"); year = val("year")
+        if not all([day, month, year]):
+            skipped.append(f"Rec#{rec_no} · {name} — missing date")
+            continue
+
+        try:
+            txn_date = date(int(year), int(month), int(day))
+        except ValueError:
+            skipped.append(f"Rec#{rec_no} · {name} — bad date {day}/{month}/{year}")
+            continue
+
+        fy_str  = _fy(txn_date)
+        total   = float(val("amount") or 0)
+        bank_a  = float(val("bank")   or 0)
+        cash_a  = float(val("cash")   or 0)
+
+        if total <= 0:
+            continue
+
+        mode = "BOTH" if bank_a > 0 and cash_a > 0 else ("BANK" if bank_a > 0 else "CASH")
+
+        any_fund = False
+        for i, col in enumerate(FUND_COLS):
+            col_amt = float(val(col) or 0)
+            if col_amt <= 0:
+                continue
+            any_fund = True
+            fs_code, fest_code, inc_type = RECEIPT_FUND_COLS[i]
+            # pro-rate bank/cash split when amounts split across funds
+            ratio = col_amt / total if total else 1
+            rows.append({
+                "txn_date":       txn_date,
+                "fy":             fy_str,
+                "book_no":        last_book,
+                "receipt_no":     int(rec_no) if rec_no else None,
+                "donor_name":     name[:80],
+                "total_amount":   col_amt,
+                "bank_amount":    round(bank_a * ratio, 2),
+                "cash_amount":    round(cash_a * ratio, 2),
+                "payment_mode":   mode,
+                "fund_source_id": fs_by_code.get(fs_code),
+                "festival_id":    fest_by_code.get(fest_code) if fest_code else None,
+                "income_type":    inc_type,
+                "_fund_code":     fs_code or "—",
+                "_fest_code":     fest_code or "—",
+            })
+
+        if not any_fund:
+            skipped.append(f"Rec#{rec_no} · {name} · ₹{total:,.0f} — no fund column")
+
+    return rows, skipped
+
+
+def _bulk_insert_income(rows: list, user: str) -> int:
+    count = 0
+    with _cursor() as c:
+        for r in rows:
+            c.execute("""
+                INSERT INTO income_transactions
+                  (txn_date,fy,book_no,receipt_no,donor_name,
+                   total_amount,bank_amount,cash_amount,payment_mode,
+                   fund_source_id,festival_id,income_type,entered_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (r["txn_date"],r["fy"],r["book_no"],r["receipt_no"],r["donor_name"],
+                  r["total_amount"],r["bank_amount"],r["cash_amount"],r["payment_mode"],
+                  r["fund_source_id"],r["festival_id"],r["income_type"],user))
+            count += 1
+    return count
+
+
 def _bulk_insert_advances(advances: list, user: str) -> int:
     count = 0
     with _cursor() as c:
@@ -625,87 +739,147 @@ def render_expense_entry(user: str):
     # ═══════════════════════════════════════════════════════════
     with tabs[2]:
         st.markdown("#### 📥 Import from Excel")
-        st.caption("Upload PTFT ACC spreadsheet — EXP tab will be parsed. "
-                   "Expenses auto-classified by fund column + keyword. "
-                   "Rows needing review shown separately.")
 
-        uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"])
+        import_mode = st.radio("What to import", ["Expenses (EXP sheet)", "Receipts / Collections (RECEIPTS sheet)"],
+                               horizontal=True, key="import_mode")
+
+        uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"],
+                                    key=f"upload_{import_mode[:3]}")
 
         if uploaded:
-            with st.spinner("Parsing..."):
-                rows, skipped, advances = _parse_excel(
-                    uploaded, fs_by_code, mh_by_code, fest_by_code)
+            import pandas as pd
 
-            ok_rows   = [r for r in rows if not r.get("_needs_review")]
-            warn_rows = [r for r in rows if r.get("_needs_review")]
+            # ════════════════════════════════════════════════════
+            # MODE A — EXPENSES
+            # ════════════════════════════════════════════════════
+            if import_mode.startswith("Expenses"):
+                with st.spinner("Parsing EXP sheet..."):
+                    rows, skipped, advances = _parse_excel(
+                        uploaded, fs_by_code, mh_by_code, fest_by_code)
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("✅ Ready to import", len(ok_rows))
-            col2.metric("⚠️ Needs review",    len(warn_rows))
-            col3.metric("🔵 Mani advances",   len(advances))
+                ok_rows   = [r for r in rows if not r.get("_needs_review")]
+                warn_rows = [r for r in rows if r.get("_needs_review")]
 
-            if ok_rows:
-                st.markdown("**Ready rows (sample — first 20)**")
-                import pandas as pd
-                preview = pd.DataFrame([{
-                    "Date": r["txn_date"],
-                    "Fund": r["_fund_code"],
-                    "Head": r["_mh_code"] or "—",
-                    "Festival": r["_fest_code"] or "—",
-                    "₹": r["amount"],
-                    "Mode": r["payment_mode"],
-                    "Description": (r["description"] or "")[:40],
-                } for r in ok_rows[:20]])
-                st.dataframe(preview, use_container_width=True, hide_index=True)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("✅ Ready to import", len(ok_rows))
+                col2.metric("⚠️ Needs review",    len(warn_rows))
+                col3.metric("🔵 Mani advances",   len(advances))
 
-            if warn_rows:
-                st.markdown("**⚠️ Rows needing manual head assignment**")
-                for i, r in enumerate(warn_rows):
-                    wc1, wc2 = st.columns([3,2])
-                    with wc1:
-                        st.markdown(f"`{r['txn_date']}` · {r['_fund_code']} · "
-                                    f"₹{r['amount']:,.0f} · {r['description']}")
-                    with wc2:
-                        chosen = st.selectbox(f"Head##{i}",
-                            options=[None]+[m["id"] for m in mh_list],
-                            format_func=lambda x: "— select —" if x is None else
-                                f"{mh_by_id[x]['code']} {mh_by_id[x]['name']}",
-                            key=f"warn_mh_{i}")
-                        if chosen:
-                            warn_rows[i]["major_head_id"] = chosen
-                            warn_rows[i]["_needs_review"] = False
+                if ok_rows:
+                    st.markdown("**Ready rows (sample — first 20)**")
+                    preview = pd.DataFrame([{
+                        "Date": r["txn_date"], "Fund": r["_fund_code"],
+                        "Head": r["_mh_code"] or "—", "Festival": r["_fest_code"] or "—",
+                        "₹": r["amount"], "Mode": r["payment_mode"],
+                        "Description": (r["description"] or "")[:40],
+                    } for r in ok_rows[:20]])
+                    st.dataframe(preview, use_container_width=True, hide_index=True)
 
-            if skipped:
-                with st.expander(f"Skipped rows ({len(skipped)})"):
-                    for s in skipped: st.caption(s)
+                if warn_rows:
+                    st.markdown("**⚠️ Rows needing manual head assignment**")
+                    for i, r in enumerate(warn_rows):
+                        wc1, wc2 = st.columns([3,2])
+                        with wc1:
+                            st.markdown(f"`{r['txn_date']}` · {r['_fund_code']} · "
+                                        f"₹{r['amount']:,.0f} · {r['description']}")
+                        with wc2:
+                            chosen = st.selectbox(f"Head##{i}",
+                                options=[None]+[m["id"] for m in mh_list],
+                                format_func=lambda x: "— select —" if x is None else
+                                    f"{mh_by_id[x]['code']} {mh_by_id[x]['name']}",
+                                key=f"warn_mh_{i}")
+                            if chosen:
+                                warn_rows[i]["major_head_id"] = chosen
+                                warn_rows[i]["_needs_review"] = False
 
-            if advances:
-                st.markdown("**🔵 Manikandan advances found**")
-                adv_df = [{"Date":a["txn_date"],"₹":a["amount"],
-                           "Mode":a["payment_mode"],"Ref":a["cheque_no"] or "",
-                           "Description":a["description"]} for a in advances]
-                st.dataframe(adv_df, use_container_width=True, hide_index=True)
+                if skipped:
+                    with st.expander(f"Skipped rows ({len(skipped)})"):
+                        for s in skipped: st.caption(s)
 
-            st.markdown("---")
-            bcol1, bcol2 = st.columns(2)
-            with bcol1:
-                if st.button("🚀 Import Expenses", type="primary",
-                             disabled=not any(not r.get("_needs_review") for r in rows)):
-                    try:
-                        n = _bulk_insert_expenses(rows, user)
-                        st.success(f"✅ {n} expense rows imported.")
-                        st.cache_data.clear()
-                    except Exception as ex:
-                        st.error(f"Import failed: {ex}")
-            with bcol2:
                 if advances:
-                    if st.button("🔵 Import Manikandan Advances"):
+                    st.markdown("**🔵 Manikandan advances found**")
+                    adv_df = [{"Date":a["txn_date"],"₹":a["amount"],
+                               "Mode":a["payment_mode"],"Ref":a["cheque_no"] or "",
+                               "Description":a["description"]} for a in advances]
+                    st.dataframe(adv_df, use_container_width=True, hide_index=True)
+
+                st.markdown("---")
+                bcol1, bcol2 = st.columns(2)
+                with bcol1:
+                    if st.button("🚀 Import Expenses", type="primary",
+                                 disabled=not any(not r.get("_needs_review") for r in rows)):
                         try:
-                            n = _bulk_insert_advances(advances, user)
-                            st.success(f"✅ {n} advance rows imported.")
+                            n = _bulk_insert_expenses(rows, user)
+                            st.success(f"✅ {n} expense rows imported.")
                             st.cache_data.clear()
                         except Exception as ex:
                             st.error(f"Import failed: {ex}")
+                with bcol2:
+                    if advances:
+                        if st.button("🔵 Import Manikandan Advances"):
+                            try:
+                                n = _bulk_insert_advances(advances, user)
+                                st.success(f"✅ {n} advance rows imported.")
+                                st.cache_data.clear()
+                            except Exception as ex:
+                                st.error(f"Import failed: {ex}")
+
+            # ════════════════════════════════════════════════════
+            # MODE B — RECEIPTS / COLLECTIONS
+            # ════════════════════════════════════════════════════
+            else:
+                with st.spinner("Parsing RECEIPTS sheet..."):
+                    rec_rows, rec_skipped = _parse_receipts_excel(
+                        uploaded, fs_by_code, fest_by_code)
+
+                # Summary by fund
+                fund_totals = {}
+                for r in rec_rows:
+                    k = r["_fund_code"]
+                    fund_totals[k] = fund_totals.get(k, 0) + r["total_amount"]
+
+                grand = sum(fund_totals.values())
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("📄 Rows to import", len(rec_rows))
+                mc2.metric("⏭️ Skipped",         len(rec_skipped))
+                mc3.metric("💰 Total ₹",          f"{grand:,.0f}")
+
+                # Fund-wise breakdown
+                if fund_totals:
+                    st.markdown("**Fund-wise breakdown**")
+                    st.dataframe(pd.DataFrame([
+                        {"Fund": k, "₹ Total": f"{v:,.0f}"}
+                        for k, v in sorted(fund_totals.items())
+                    ]), use_container_width=True, hide_index=True)
+
+                # Preview first 30 rows
+                if rec_rows:
+                    st.markdown("**Preview (first 30 rows)**")
+                    prev = pd.DataFrame([{
+                        "Rec#":    r["receipt_no"],
+                        "Date":    r["txn_date"].strftime("%d/%m/%Y"),
+                        "Donor":   r["donor_name"][:35],
+                        "Fund":    r["_fund_code"],
+                        "Festival":r["_fest_code"],
+                        "₹":       f"{r['total_amount']:,.0f}",
+                        "Mode":    r["payment_mode"],
+                        "Type":    r["income_type"],
+                    } for r in rec_rows[:30]])
+                    st.dataframe(prev, use_container_width=True, hide_index=True)
+
+                if rec_skipped:
+                    with st.expander(f"Skipped rows ({len(rec_skipped)})"):
+                        for s in rec_skipped: st.caption(s)
+
+                st.markdown("---")
+                if st.button("🚀 Import Receipts", type="primary",
+                             disabled=not rec_rows):
+                    try:
+                        n = _bulk_insert_income(rec_rows, user)
+                        st.success(f"✅ {n} receipt rows imported into income_transactions.")
+                        st.cache_data.clear()
+                    except Exception as ex:
+                        st.error(f"Import failed: {ex}")
 
     # ═══════════════════════════════════════════════════════════
     # TAB 4 — Standing Amounts
