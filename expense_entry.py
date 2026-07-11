@@ -2,27 +2,53 @@
 # Tabs: New Expense | Manikandan A/C | Import Excel | Standing Amounts | Recent Entries
 
 import streamlit as st
-import psycopg
-from psycopg.rows import dict_row
+import pg8000.dbapi as _pg
+from urllib.parse import urlparse, unquote
 from datetime import date
 from contextlib import contextmanager
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
 
+def _connect():
+    dsn = st.secrets["neon"]["dsn"]
+    u = urlparse(dsn)
+    return _pg.connect(
+        host=u.hostname,
+        database=u.path.lstrip("/"),
+        user=unquote(u.username or ""),
+        password=unquote(u.password or ""),
+        port=u.port or 5432,
+        ssl_context=True,
+    )
+
 @contextmanager
 def _cursor():
-    conn = psycopg.connect(st.secrets["neon"]["dsn"], row_factory=dict_row)
-    conn.autocommit = False
+    conn = _connect()
+    cur = conn.cursor()
     try:
-        with conn.cursor() as cur:
-            yield cur
+        yield cur
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
+        cur.close()
         conn.close()
+
+def _rows(cur):
+    """Return all rows as list of dicts."""
+    if not cur.description:
+        return []
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+def _row(cur):
+    """Return one row as dict (or None)."""
+    if not cur.description:
+        return None
+    row = cur.fetchone()
+    return None if row is None else dict(zip([d[0] for d in cur.description], row))
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -34,19 +60,19 @@ def _fy(d: date) -> str:
 def _fund_sources():
     with _cursor() as c:
         c.execute("SELECT id,code,name FROM fund_sources WHERE is_active ORDER BY name")
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 @st.cache_data(ttl=300)
 def _festivals():
     with _cursor() as c:
         c.execute("SELECT id,code,name,fund_source_id FROM festivals WHERE is_active ORDER BY name")
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 @st.cache_data(ttl=300)
 def _major_heads():
     with _cursor() as c:
         c.execute("SELECT id,code,name FROM major_heads WHERE is_active ORDER BY code")
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 @st.cache_data(ttl=300)
 def _standing():
@@ -59,7 +85,7 @@ def _standing():
             LEFT JOIN festivals f ON f.id=sa.festival_id
             WHERE sa.is_active ORDER BY mh.code,sa.description
         """)
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 def _recent(limit=20):
     with _cursor() as c:
@@ -72,7 +98,7 @@ def _recent(limit=20):
             LEFT JOIN festivals fv ON fv.id=et.festival_id
             ORDER BY et.created_at DESC LIMIT %s
         """, (limit,))
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 def _save_expense(rec):
     with _cursor() as c:
@@ -80,11 +106,11 @@ def _save_expense(rec):
             INSERT INTO expense_transactions
               (txn_date,fy,fund_source_id,festival_id,major_head_id,amount,
                payment_mode,cheque_no,utr_ref_no,description,paid_to,entered_by)
-            VALUES (%(txn_date)s,%(fy)s,%(fund_source_id)s,%(festival_id)s,%(major_head_id)s,
-                    %(amount)s,%(payment_mode)s,%(cheque_no)s,%(utr_ref_no)s,
-                    %(description)s,%(paid_to)s,%(entered_by)s) RETURNING id
-        """, rec)
-        return c.fetchone()["id"]
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+        """, (rec["txn_date"],rec["fy"],rec["fund_source_id"],rec["festival_id"],
+              rec["major_head_id"],rec["amount"],rec["payment_mode"],rec["cheque_no"],
+              rec["utr_ref_no"],rec["description"],rec["paid_to"],rec["entered_by"]))
+        return _row(c)["id"]
 
 # ── Priest float helpers ───────────────────────────────────────────────────────
 
@@ -96,7 +122,7 @@ def _priest_balance(fy_str):
               COALESCE(SUM(CASE WHEN txn_type='EXPENSE' THEN amount ELSE 0 END),0) expenses
             FROM priest_float WHERE fy=%s
         """, (fy_str,))
-        r = dict(c.fetchone())
+        r = _row(c)
         return float(r["advances"]), float(r["expenses"])
 
 def _priest_ledger(fy_str, limit=30):
@@ -111,7 +137,7 @@ def _priest_ledger(fy_str, limit=30):
             LEFT JOIN fund_sources fs ON fs.id=pf.fund_source_id
             WHERE pf.fy=%s ORDER BY pf.txn_date DESC,pf.id DESC LIMIT %s
         """, (fy_str, limit))
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 def _save_priest(rec):
     with _cursor() as c:
@@ -119,12 +145,12 @@ def _save_priest(rec):
             INSERT INTO priest_float
               (txn_date,fy,txn_type,amount,major_head_id,fund_source_id,festival_id,
                description,payment_mode,cheque_no,utr_ref_no,entered_by)
-            VALUES (%(txn_date)s,%(fy)s,%(txn_type)s,%(amount)s,%(major_head_id)s,
-                    %(fund_source_id)s,%(festival_id)s,%(description)s,
-                    %(payment_mode)s,%(cheque_no)s,%(utr_ref_no)s,%(entered_by)s)
-            RETURNING id
-        """, rec)
-        return c.fetchone()["id"]
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+        """, (rec["txn_date"],rec["fy"],rec["txn_type"],rec["amount"],
+              rec["major_head_id"],rec["fund_source_id"],rec["festival_id"],
+              rec["description"],rec["payment_mode"],rec["cheque_no"],
+              rec["utr_ref_no"],rec["entered_by"]))
+        return _row(c)["id"]
 
 # ── Excel import helpers ───────────────────────────────────────────────────────
 
@@ -470,7 +496,7 @@ def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
                          OR CAST(et.id AS TEXT)=%s OR et.cheque_no=%s)
             ORDER BY et.txn_date DESC, et.id DESC LIMIT %s
         """, (fy_str, q, f"%{q}%", f"%{q}%", q, q, limit))
-        return [dict(r) for r in c.fetchall()]
+        return _rows(c)
 
 def _update_expense(txn_id: int, upd: dict):
     with _cursor() as c:
