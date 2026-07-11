@@ -2,8 +2,8 @@
 # Tabs: New Expense | Manikandan A/C | Import Excel | Standing Amounts | Recent Entries
 
 import streamlit as st
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 from datetime import date
 from contextlib import contextmanager
 
@@ -12,10 +12,10 @@ from contextlib import contextmanager
 
 @contextmanager
 def _cursor():
-    conn = psycopg2.connect(st.secrets["neon"]["dsn"])
+    conn = psycopg.connect(st.secrets["neon"]["dsn"], row_factory=dict_row)
     conn.autocommit = False
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             yield cur
         conn.commit()
     except Exception:
@@ -744,7 +744,7 @@ def render_expense_entry(user: str):
                                horizontal=True, key="import_mode")
 
         uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"],
-                                    key=f"upload_{import_mode[:3]}")
+                                    key="import_xlsx")
 
         if uploaded:
             import pandas as pd
