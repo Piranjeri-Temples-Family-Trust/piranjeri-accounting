@@ -336,6 +336,47 @@ def _bulk_insert_advances(advances: list, user: str) -> int:
     return count
 
 
+# ── Edit / Void helpers ────────────────────────────────────────────────────────
+
+def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
+    with _cursor() as c:
+        c.execute("""
+            SELECT et.id, et.txn_date, et.amount, et.payment_mode,
+                   et.description, et.paid_to, et.cheque_no, et.utr_ref_no,
+                   et.fund_source_id, et.festival_id, et.major_head_id,
+                   mh.code mh_code, mh.name mh_name,
+                   fs.code fund_code, fv.name festival_name,
+                   et.entered_by, et.fy
+            FROM expense_transactions et
+            JOIN major_heads mh ON mh.id=et.major_head_id
+            JOIN fund_sources fs ON fs.id=et.fund_source_id
+            LEFT JOIN festivals fv ON fv.id=et.festival_id
+            WHERE et.fy=%s
+              AND (%s='' OR et.description ILIKE %s OR et.paid_to ILIKE %s
+                         OR CAST(et.id AS TEXT)=%s OR et.cheque_no=%s)
+            ORDER BY et.txn_date DESC, et.id DESC LIMIT %s
+        """, (fy_str, q, f"%{q}%", f"%{q}%", q, q, limit))
+        return [dict(r) for r in c.fetchall()]
+
+def _update_expense(txn_id: int, upd: dict):
+    with _cursor() as c:
+        c.execute("""
+            UPDATE expense_transactions SET
+              txn_date=%s, fund_source_id=%s, festival_id=%s, major_head_id=%s,
+              amount=%s, payment_mode=%s, cheque_no=%s, utr_ref_no=%s,
+              description=%s, paid_to=%s
+            WHERE id=%s
+        """, (upd["txn_date"], upd["fund_source_id"], upd["festival_id"],
+              upd["major_head_id"], upd["amount"], upd["payment_mode"],
+              upd["cheque_no"], upd["utr_ref_no"],
+              upd["description"], upd["paid_to"], txn_id))
+
+def _void_expense(txn_id: int):
+    with _cursor() as c:
+        c.execute("DELETE FROM ledger_entries WHERE txn_id=%s", (txn_id,))
+        c.execute("DELETE FROM expense_transactions WHERE id=%s", (txn_id,))
+
+
 # ── CSS ────────────────────────────────────────────────────────────────────────
 
 def _css():
@@ -381,7 +422,7 @@ def render_expense_entry(user: str):
     fest_by_id   = {f["id"]: f for f in fest_list}
     fest_by_code = {f["code"]: f["id"] for f in fest_list}
 
-    tabs = st.tabs(["✏️ New Expense","👤 Manikandan A/C","📥 Import Excel","📌 Standing Amts","🕐 Recent"])
+    tabs = st.tabs(["✏️ New Expense","👤 Manikandan A/C","📥 Import Excel","📌 Standing Amts","🕐 Recent","🔧 Edit/Void"])
 
     # ═══════════════════════════════════════════════════════════
     # TAB 1 — New Expense
@@ -692,3 +733,161 @@ def render_expense_entry(user: str):
                 <br><span style="color:#94a3b8;font-size:.72rem">{icon} {e['entered_by']}</span>
               </div>
             </div>""", unsafe_allow_html=True)
+
+    # ═══════════════════════════════════════════════════════════
+    # TAB 6 — Edit / Void
+    # ═══════════════════════════════════════════════════════════
+    with tabs[5]:
+        st.markdown("#### 🔧 Edit or Void an Expense")
+
+        # ── Step 1: Search ──────────────────────────────────────
+        cur_fy = _fy(date.today())
+        yr = int(cur_fy[:4])
+        fy_options = [
+            cur_fy,
+            f"{yr-1}-{str(yr)[2:]}",
+            f"{yr+1}-{str(yr+2)[2:]}",
+        ]
+
+        sc1, sc2 = st.columns([1, 3])
+        with sc1:
+            ev_fy = st.selectbox("Financial Year", fy_options, key="ev_fy")
+        with sc2:
+            ev_q = st.text_input("Search description, paid-to, cheque no, or row ID",
+                                 key="ev_q", placeholder="e.g. flowers  or  338370  or  42")
+
+        if st.button("🔍 Search", key="ev_search"):
+            st.session_state.ev_results = _search_expenses(ev_fy, ev_q.strip())
+            st.session_state.ev_sel = None
+
+        results_ev = st.session_state.get("ev_results")
+
+        if results_ev is not None:
+            if not results_ev:
+                st.info("No entries found. Try a different keyword or FY.")
+            else:
+                import pandas as pd
+                preview_ev = pd.DataFrame([{
+                    "ID":    r["id"],
+                    "Date":  r["txn_date"].strftime("%d %b %Y"),
+                    "Fund":  r["fund_code"],
+                    "Head":  f"{r['mh_code']} {r['mh_name']}",
+                    "₹":     f"{float(r['amount']):,.2f}",
+                    "Mode":  r["payment_mode"],
+                    "Desc":  (r.get("description") or "")[:40],
+                    "Cheque": r.get("cheque_no") or "",
+                } for r in results_ev])
+                st.dataframe(preview_ev, use_container_width=True, hide_index=True)
+                st.caption(f"{len(results_ev)} entries found")
+
+                # ── Step 2: Pick one ────────────────────────────────
+                id_label = {
+                    r["id"]: f"#{r['id']} · {r['txn_date'].strftime('%d %b %Y')} · "
+                             f"{r['fund_code']} · ₹{float(r['amount']):,.0f}"
+                             f"{' · ' + r['description'][:25] if r.get('description') else ''}"
+                    for r in results_ev
+                }
+                sel_id = st.selectbox(
+                    "Select entry to edit / void",
+                    options=[None] + list(id_label.keys()),
+                    format_func=lambda x: "— pick a row —" if x is None else id_label[x],
+                    key="ev_sel",
+                )
+
+                if sel_id:
+                    sel = next(r for r in results_ev if r["id"] == sel_id)
+                    st.markdown("---")
+                    st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; "
+                                f"entered by `{sel['entered_by']}`")
+
+                    # ── Edit form ───────────────────────────────────
+                    with st.form("edit_expense_form"):
+                        fe1,fe2,fe3,fe4 = st.columns([1.1,0.9,1.4,1.4])
+                        with fe1:
+                            e_date = st.date_input("Date", value=sel["txn_date"])
+                        with fe2:
+                            modes = ["CASH","CHEQUE","BANK_TRANSFER"]
+                            e_mode = st.selectbox(
+                                "Mode", modes,
+                                index=modes.index(sel["payment_mode"] or "CASH"),
+                                format_func=lambda x: {"CASH":"Cash","CHEQUE":"Cheque",
+                                                       "BANK_TRANSFER":"Bank Tfr"}[x])
+                        with fe3:
+                            fs_opts_e = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
+                            fs_keys_e = list(fs_opts_e.keys())
+                            e_fs = st.selectbox(
+                                "Fund", fs_keys_e,
+                                index=fs_keys_e.index(sel["fund_source_id"])
+                                      if sel["fund_source_id"] in fs_keys_e else 0,
+                                format_func=lambda x: fs_opts_e[x])
+                        with fe4:
+                            ff_e = [f for f in fest_list if f["fund_source_id"]==e_fs]
+                            fo_e = {None:"— General —"} | {f["id"]: f["name"] for f in ff_e}
+                            fk_e = list(fo_e.keys())
+                            e_fest = st.selectbox(
+                                "Festival", fk_e,
+                                index=fk_e.index(sel["festival_id"])
+                                      if sel.get("festival_id") in fk_e else 0,
+                                format_func=lambda x: fo_e[x])
+
+                        fe5,fe6 = st.columns([2,1])
+                        with fe5:
+                            mh_opts_e = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
+                            mh_keys_e = list(mh_opts_e.keys())
+                            e_mh = st.selectbox(
+                                "Head", mh_keys_e,
+                                index=mh_keys_e.index(sel["major_head_id"])
+                                      if sel.get("major_head_id") in mh_keys_e else 0,
+                                format_func=lambda x: mh_opts_e[x])
+                        with fe6:
+                            e_amt = st.number_input("Amount (₹)", value=float(sel["amount"]),
+                                                    min_value=1.0, step=50.0, format="%.2f")
+
+                        fe7,fe8,fe9 = st.columns([1,1.5,1.5])
+                        with fe7:
+                            e_chq = st.text_input("Cheque No.",
+                                                  value=sel.get("cheque_no") or "",
+                                                  max_chars=30) or None
+                        with fe8:
+                            e_utr = st.text_input("UTR Ref.",
+                                                  value=sel.get("utr_ref_no") or "",
+                                                  max_chars=40) or None
+                        with fe9:
+                            e_desc = st.text_input("Description",
+                                                   value=sel.get("description") or "",
+                                                   max_chars=50) or None
+
+                        e_paid = st.text_input("Paid To",
+                                               value=sel.get("paid_to") or "",
+                                               max_chars=50) or None
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        bc1, bc2, bc3 = st.columns([1,1,2])
+                        with bc1: save_ok  = st.form_submit_button("💾 Save Changes", type="primary")
+                        with bc2: void_ok  = st.form_submit_button("🗑️ Void & Delete")
+
+                    if save_ok:
+                        try:
+                            _update_expense(sel_id, {
+                                "txn_date": e_date, "fund_source_id": e_fs,
+                                "festival_id": e_fest, "major_head_id": e_mh,
+                                "amount": e_amt, "payment_mode": e_mode,
+                                "cheque_no": e_chq, "utr_ref_no": e_utr,
+                                "description": e_desc, "paid_to": e_paid,
+                            })
+                            st.success(f"✅ Entry #{sel_id} updated.")
+                            del st.session_state["ev_results"]
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Update failed: {ex}")
+
+                    if void_ok:
+                        try:
+                            _void_expense(sel_id)
+                            st.success(f"✅ Entry #{sel_id} deleted.")
+                            del st.session_state["ev_results"]
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Delete failed: {ex}")
