@@ -586,7 +586,7 @@ def render_expense_entry(user: str):
                 with hcols[i]:
                     if st.button(f"₹{s['default_amount']:,.0f}  {s['description']}",
                                  key=f"sa_h_{s['major_head_id']}_{s.get('festival_id','g')}_{i}",
-                                 use_container_width=True):
+                                 ):
                         st.session_state["_pf_amount"] = float(s["default_amount"])
                         st.rerun()
 
@@ -773,7 +773,7 @@ def render_expense_entry(user: str):
                         "₹": r["amount"], "Mode": r["payment_mode"],
                         "Description": (r["description"] or "")[:40],
                     } for r in ok_rows[:20]])
-                    st.dataframe(preview, use_container_width=True, hide_index=True)
+                    st.dataframe(preview, width='stretch', hide_index=True)
 
                 if warn_rows:
                     st.markdown("**⚠️ Rows needing manual head assignment**")
@@ -801,7 +801,7 @@ def render_expense_entry(user: str):
                     adv_df = [{"Date":a["txn_date"],"₹":a["amount"],
                                "Mode":a["payment_mode"],"Ref":a["cheque_no"] or "",
                                "Description":a["description"]} for a in advances]
-                    st.dataframe(adv_df, use_container_width=True, hide_index=True)
+                    st.dataframe(adv_df, width='stretch', hide_index=True)
 
                 st.markdown("---")
                 bcol1, bcol2 = st.columns(2)
@@ -850,7 +850,7 @@ def render_expense_entry(user: str):
                     st.dataframe(pd.DataFrame([
                         {"Fund": k, "₹ Total": f"{v:,.0f}"}
                         for k, v in sorted(fund_totals.items())
-                    ]), use_container_width=True, hide_index=True)
+                    ]), width='stretch', hide_index=True)
 
                 # Preview first 30 rows
                 if rec_rows:
@@ -865,7 +865,7 @@ def render_expense_entry(user: str):
                         "Mode":    r["payment_mode"],
                         "Type":    r["income_type"],
                     } for r in rec_rows[:30]])
-                    st.dataframe(prev, use_container_width=True, hide_index=True)
+                    st.dataframe(prev, width='stretch', hide_index=True)
 
                 if rec_skipped:
                     with st.expander(f"Skipped rows ({len(rec_skipped)})"):
@@ -901,7 +901,7 @@ def render_expense_entry(user: str):
                         "Item": i["description"],
                         "₹ Default": f"{i['default_amount']:,.2f}",
                         "Notes": i["notes"] or "",
-                    } for i in items]), use_container_width=True, hide_index=True)
+                    } for i in items]), width='stretch', hide_index=True)
 
     # ═══════════════════════════════════════════════════════════
     # TAB 5 — Recent Entries
@@ -976,7 +976,7 @@ def render_expense_entry(user: str):
                     "Desc":  (r.get("description") or "")[:40],
                     "Cheque": r.get("cheque_no") or "",
                 } for r in results_ev])
-                st.dataframe(preview_ev, use_container_width=True, hide_index=True)
+                st.dataframe(preview_ev, width='stretch', hide_index=True)
                 st.caption(f"{len(results_ev)} entries found")
 
                 # ── Step 2: Pick one ────────────────────────────────
