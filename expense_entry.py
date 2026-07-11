@@ -1153,7 +1153,7 @@ def render_expense_entry(user: str):
                 cb_fund = st.selectbox("Fund", list(fund_opts_l),
                                        format_func=lambda x: fund_opts_l[x], key="cb_fund")
 
-            if st.button("🔍 Load Cash Book", key="cb_load"):
+            if st.button("\U0001f50d Load Cash Book", key="cb_load"):
                 try:
                     cb_rows = _ledger_cashbook(led_fy, cb_from, cb_to, cb_fund)
                     st.session_state["cb_rows"] = cb_rows
@@ -1172,41 +1172,40 @@ def render_expense_entry(user: str):
                         exp = float(r["expense"])
                         running += inc - exp
                         table_rows.append({
-                            "Date":    r["txn_date"].strftime("%d %b %Y"),
-                            "Type":    r["txn_type"],
-                            "Fund":    r["fund_code"],
-                            "Festival": r["festival"],
+                            "Date":        r["txn_date"].strftime("%d %b %Y"),
+                            "Type":        r["txn_type"],
+                            "Fund":        r["fund_code"],
+                            "Festival":    r["festival"],
                             "Description": r["description"][:40],
-                            "Income ₹":  f"{inc:,.2f}" if inc else "",
-                            "Expense ₹": f"{exp:,.2f}" if exp else "",
-                            "Balance ₹": f"{running:,.2f}",
+                            "Income":      f"{inc:,.2f}" if inc else "",
+                            "Expense":     f"{exp:,.2f}" if exp else "",
+                            "Balance":     f"{running:,.2f}",
                         })
                     st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
                     st.caption(f"{len(cb_rows)} transactions")
 
-    # ═══════════════════════════════════════════════════════════
-    # TAB 7 — Edit / Void
-    # ═══════════════════════════════════════════════════════════
+    # ===========================================================
+    # TAB 7 -- Edit / Void
+    # ===========================================================
     with tabs[6]:
-        st.markdown("#### 🔧 Edit or Void an Expense")
+        st.markdown("#### \U0001f527 Edit or Void an Expense")
 
-        # ── Step 1: Search ──────────────────────────────────────
-        cur_fy = _fy(date.today())
-        yr = int(cur_fy[:4])
-        fy_options = [
-            cur_fy,
-            f"{yr-1}-{str(yr)[2:]}",
-            f"{yr+1}-{str(yr+2)[2:]}",
+        cur_fy2 = _fy(date.today())
+        yr2 = int(cur_fy2[:4])
+        fy_options2 = [
+            cur_fy2,
+            f"{yr2-1}-{str(yr2)[2:]}",
+            f"{yr2+1}-{str(yr2+2)[2:]}",
         ]
 
         sc1, sc2 = st.columns([1, 3])
         with sc1:
-            ev_fy = st.selectbox("Financial Year", fy_options, key="ev_fy")
+            ev_fy = st.selectbox("Financial Year", fy_options2, key="ev_fy")
         with sc2:
             ev_q = st.text_input("Search description, paid-to, cheque no, or row ID",
-                                 key="ev_q", placeholder="e.g. flowers  or  338370  or  42")
+                                 key="ev_q", placeholder="e.g. flowers  or  42")
 
-        if st.button("🔍 Search", key="ev_search"):
+        if st.button("\U0001f50d Search", key="ev_search"):
             st.session_state.ev_results = _search_expenses(ev_fy, ev_q.strip())
             st.session_state.ev_sel = None
 
@@ -1216,21 +1215,20 @@ def render_expense_entry(user: str):
             if not results_ev:
                 st.info("No entries found. Try a different keyword or FY.")
             else:
-                import pandas as pd
+                import pandas as _pd2
                 preview_ev = pd.DataFrame([{
-                    "ID":    r["id"],
-                    "Date":  r["txn_date"].strftime("%d %b %Y"),
-                    "Fund":  r["fund_code"],
-                    "Head":  f"{r['mh_code']} {r['mh_name']}",
-                    "₹":     f"{float(r['amount']):,.2f}",
-                    "Mode":  r["payment_mode"],
-                    "Desc":  (r.get("description") or "")[:40],
+                    "ID":     r["id"],
+                    "Date":   r["txn_date"].strftime("%d %b %Y"),
+                    "Fund":   r["fund_code"],
+                    "Head":   f"{r['mh_code']} {r['mh_name']}",
+                    "Rs":     f"{float(r['amount']):,.2f}",
+                    "Mode":   r["payment_mode"],
+                    "Desc":   (r.get("description") or "")[:40],
                     "Cheque": r.get("cheque_no") or "",
                 } for r in results_ev])
                 st.dataframe(preview_ev, width='stretch', hide_index=True)
                 st.caption(f"{len(results_ev)} entries found")
 
-                # ── Step 2: Pick one ────────────────────────────────
                 id_label = {
                     r["id"]: f"#{r['id']} · {r['txn_date'].strftime('%d %b %Y')} · "
                              f"{r['fund_code']} · ₹{float(r['amount']):,.0f}"
@@ -1247,10 +1245,8 @@ def render_expense_entry(user: str):
                 if sel_id:
                     sel = next(r for r in results_ev if r["id"] == sel_id)
                     st.markdown("---")
-                    st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; "
-                                f"entered by `{sel['entered_by']}`")
+                    st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; entered by `{sel['entered_by']}`")
 
-                    # ── Edit form ───────────────────────────────────
                     with st.form("edit_expense_form"):
                         fe1,fe2,fe3,fe4 = st.columns([1.1,0.9,1.4,1.4])
                         with fe1:
@@ -1277,7 +1273,7 @@ def render_expense_entry(user: str):
                             e_fest = st.selectbox(
                                 "Festival", fk_e,
                                 index=fk_e.index(sel["festival_id"])
-                                      if sel.get("festival_id") in fk_e else 0,
+                                      if sel["festival_id"] in fk_e else 0,
                                 format_func=lambda x: fo_e[x])
 
                         fe5,fe6 = st.columns([2,1])
@@ -1287,56 +1283,61 @@ def render_expense_entry(user: str):
                             e_mh = st.selectbox(
                                 "Head", mh_keys_e,
                                 index=mh_keys_e.index(sel["major_head_id"])
-                                      if sel.get("major_head_id") in mh_keys_e else 0,
+                                      if sel["major_head_id"] in mh_keys_e else 0,
                                 format_func=lambda x: mh_opts_e[x])
                         with fe6:
-                            e_amt = st.number_input("Amount (₹)", value=float(sel["amount"]),
-                                                    min_value=1.0, step=50.0, format="%.2f")
+                            e_amt = st.number_input("Amount", min_value=1.0,
+                                                    value=float(sel["amount"]),
+                                                    step=50.0, format="%.2f")
 
                         fe7,fe8,fe9 = st.columns([1,1.5,1.5])
+                        e_chq = e_utr = None
                         with fe7:
-                            e_chq = st.text_input("Cheque No.",
-                                                  value=sel.get("cheque_no") or "",
-                                                  max_chars=30) or None
+                            if e_mode == "CHEQUE":
+                                e_chq = st.text_input("Cheque No.",
+                                                      value=sel.get("cheque_no") or "",
+                                                      max_chars=30) or None
+                            elif e_mode == "BANK_TRANSFER":
+                                e_utr = st.text_input("UTR Ref.",
+                                                      value=sel.get("utr_ref_no") or "",
+                                                      max_chars=30) or None
                         with fe8:
-                            e_utr = st.text_input("UTR Ref.",
-                                                  value=sel.get("utr_ref_no") or "",
-                                                  max_chars=40) or None
-                        with fe9:
                             e_desc = st.text_input("Description",
                                                    value=sel.get("description") or "",
                                                    max_chars=50) or None
-
-                        e_paid = st.text_input("Paid To",
-                                               value=sel.get("paid_to") or "",
-                                               max_chars=50) or None
+                        with fe9:
+                            e_paid = st.text_input("Paid To",
+                                                   value=sel.get("paid_to") or "",
+                                                   max_chars=50) or None
 
                         st.markdown("<br>", unsafe_allow_html=True)
-                        bc1, bc2, bc3 = st.columns([1,1,2])
-                        with bc1: save_ok  = st.form_submit_button("💾 Save Changes", type="primary")
-                        with bc2: void_ok  = st.form_submit_button("🗑️ Void & Delete")
+                        btn_save, btn_void = st.columns([3,1])
+                        with btn_save:
+                            do_save = st.form_submit_button("\U0001f4be Save Changes", type="primary")
+                        with btn_void:
+                            do_void = st.form_submit_button("\U0001f5d1 Void/Delete", type="secondary")
 
-                    if save_ok:
+                    if do_save:
                         try:
                             _update_expense(sel_id, {
                                 "txn_date": e_date, "fund_source_id": e_fs,
                                 "festival_id": e_fest, "major_head_id": e_mh,
-                                "amount": e_amt, "payment_mode": e_mode,
+                                "amount": float(e_amt), "payment_mode": e_mode,
                                 "cheque_no": e_chq, "utr_ref_no": e_utr,
                                 "description": e_desc, "paid_to": e_paid,
                             })
                             st.success(f"✅ Entry #{sel_id} updated.")
-                            del st.session_state["ev_results"]
+                            st.session_state.ev_results = None
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as ex:
-                            st.error(f"Update failed: {ex}")
+                            st.error(f"Save failed: {ex}")
 
-                    if void_ok:
+                    if do_void:
                         try:
                             _void_expense(sel_id)
                             st.success(f"✅ Entry #{sel_id} deleted.")
-                            del st.session_state["ev_results"]
+                            st.session_state.ev_results = None
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as ex:
