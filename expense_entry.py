@@ -427,6 +427,12 @@ def render_expense_entry(user: str):
     # TAB 1 — New Expense
     # ═══════════════════════════════════════════════════════════
     with tabs[0]:
+        # ── Transfer prefill from hint-button click ──────────────
+        if "_pf_amount" in st.session_state:
+            st.session_state["exp_amount"] = float(st.session_state.pop("_pf_amount"))
+        if "_pf_mh_id" in st.session_state:
+            st.session_state["exp_mh_id"]  = st.session_state.pop("_pf_mh_id")
+
         st.markdown("#### 🧾 Record Expense")
         with st.form("exp_form", clear_on_submit=True):
             c1,c2,c3,c4 = st.columns([1.1,0.9,1.4,1.4])
@@ -438,25 +444,22 @@ def render_expense_entry(user: str):
                     format_func=lambda x:{"CASH":"Cash","CHEQUE":"Cheque","BANK_TRANSFER":"Bank Tfr"}[x])
             with c3:
                 fs_opts = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
-                fs_id = st.selectbox("Fund", list(fs_opts), format_func=lambda x: fs_opts[x])
+                fs_id = st.selectbox("Fund", list(fs_opts), format_func=lambda x: fs_opts[x],
+                                     key="exp_fs_id")
             with c4:
                 ff = [f for f in fest_list if f["fund_source_id"]==fs_id]
                 fo = {None:"— General —"} | {f["id"]: f["name"] for f in ff}
-                fest_id = st.selectbox("Festival", list(fo), format_func=lambda x: fo[x])
+                fest_id = st.selectbox("Festival", list(fo), format_func=lambda x: fo[x],
+                                       key="exp_fest_id")
 
-            c5,c6,c7 = st.columns([2,1,1.8])
+            c5,c6 = st.columns([2,1])
             with c5:
                 mh_opts = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
-                mh_id = st.selectbox("Head", list(mh_opts), format_func=lambda x: mh_opts[x])
+                mh_id = st.selectbox("Head", list(mh_opts), format_func=lambda x: mh_opts[x],
+                                     key="exp_mh_id")
             with c6:
                 amount = st.number_input("Amount (₹)", min_value=1.0, max_value=500000.0,
-                    step=50.0, format="%.2f")
-            with c7:
-                matches = [s for s in sa_list if s["major_head_id"]==mh_id
-                           and (fest_id is None or s["festival_id"]==fest_id)]
-                if matches:
-                    hint = " · ".join(f"₹{s['default_amount']:,.0f} ({s['description']})" for s in matches)
-                    st.markdown(f'<div class="hint-box">📌 {hint}</div>', unsafe_allow_html=True)
+                    step=50.0, format="%.2f", key="exp_amount")
 
             c8,c9,c10 = st.columns([1,1.5,1.5])
             cheque_no = utr = None
@@ -469,6 +472,28 @@ def render_expense_entry(user: str):
 
             st.markdown("<br>", unsafe_allow_html=True)
             ok = st.form_submit_button("💾 Save Expense", type="primary")
+
+        # ── Clickable standing-amount hints (outside form) ────────
+        cur_mh_id   = st.session_state.get("exp_mh_id")
+        cur_fest_id = st.session_state.get("exp_fest_id")
+        if cur_mh_id:
+            hint_matches = [s for s in sa_list
+                            if s["major_head_id"] == cur_mh_id
+                            and (cur_fest_id is None or s["festival_id"] is None
+                                 or s["festival_id"] == cur_fest_id)]
+            if hint_matches:
+                st.markdown("**📌 Usual amounts — click to apply:**")
+                hcols = st.columns(min(len(hint_matches), 4))
+                for i, s in enumerate(hint_matches[:4]):
+                    with hcols[i]:
+                        if st.button(
+                            f"₹{s['default_amount']:,.0f}\n{s['description']}",
+                            key=f"sa_hint_{s['major_head_id']}_{s.get('festival_id','g')}_{i}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_pf_amount"] = s["default_amount"]
+                            st.session_state["_pf_mh_id"]  = cur_mh_id
+                            st.rerun()
 
         if ok:
             errs = []
