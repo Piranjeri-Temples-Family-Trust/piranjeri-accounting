@@ -1,4 +1,4 @@
-# app_accounting.py — Piranjeri Temples Trust Accounting App
+# app_accounting.py — Piranjeri Temples Family Trust Accounting App
 # Run: streamlit run app_accounting.py
 
 import streamlit as st
@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Piranjeri Trust — Accounting",
-    page_icon="🛕",
+    page_title="Piranjeri Temples Family Trust — Accounting",
+    page_icon="🪔",
     layout="wide",
 )
 
@@ -36,7 +36,7 @@ if st.session_state.logged_in and st.session_state.last_active:
 
 # ── Login screen ──────────────────────────────────────────────────────────────
 if not st.session_state.logged_in:
-    st.title("🛕 Piranjeri Temples Trust")
+    st.title("🪔 Piranjeri Temples Family Trust")
     st.subheader("Accounting System — Login")
 
     with st.form("login_form"):
@@ -60,11 +60,11 @@ st.session_state.last_active = datetime.now()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### 🛕 Piranjeri Trust")
+    st.markdown("### 🪔 Piranjeri Temples Family Trust")
     st.markdown("**Accounting System**")
     st.divider()
     st.markdown(f"👤 Logged in as **{st.session_state.user}**")
-    if st.button("Logout", use_container_width=True):
+    if st.button("Logout", width="stretch"):
         st.session_state.logged_in   = False
         st.session_state.user        = None
         st.session_state.last_active = None
