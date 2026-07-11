@@ -476,6 +476,122 @@ def _bulk_insert_advances(advances: list, user: str) -> int:
     return count
 
 
+# ── Ledger helpers ────────────────────────────────────────────────────────────
+
+def _ledger_fund_summary(fy_str: str) -> list:
+    """Income vs Expenses vs Balance per fund source."""
+    with _cursor() as c:
+        c.execute("""
+            SELECT fs.code fund, fs.name fund_name,
+                   COALESCE(SUM(i.total_amount),0) income,
+                   0::numeric expenses
+            FROM fund_sources fs
+            LEFT JOIN income_transactions i ON i.fund_source_id=fs.id AND i.fy=%s
+            GROUP BY fs.id, fs.code, fs.name
+            UNION ALL
+            SELECT fs.code, fs.name,
+                   0, COALESCE(SUM(e.amount),0)
+            FROM fund_sources fs
+            LEFT JOIN expense_transactions e ON e.fund_source_id=fs.id AND e.fy=%s
+            GROUP BY fs.id, fs.code, fs.name
+            ORDER BY 1
+        """, (fy_str, fy_str))
+        raw = _rows(c)
+    # Aggregate
+    agg = {}
+    for r in raw:
+        k = r["fund"]
+        if k not in agg:
+            agg[k] = {"fund": k, "fund_name": r["fund_name"], "income": 0.0, "expenses": 0.0}
+        agg[k]["income"]   += float(r["income"])
+        agg[k]["expenses"] += float(r["expenses"])
+    result = sorted(agg.values(), key=lambda x: x["fund"])
+    for r in result:
+        r["balance"] = r["income"] - r["expenses"]
+    return result
+
+def _ledger_festival_summary(fy_str: str) -> list:
+    """Income vs Expenses vs Balance per festival."""
+    with _cursor() as c:
+        c.execute("""
+            SELECT COALESCE(fv.name,'General / No Festival') festival,
+                   COALESCE(SUM(i.total_amount),0) income,
+                   0::numeric expenses
+            FROM festivals fv
+            LEFT JOIN income_transactions i ON i.festival_id=fv.id AND i.fy=%s
+            GROUP BY fv.id, fv.name
+            UNION ALL
+            SELECT COALESCE(fv.name,'General / No Festival'),
+                   0, COALESCE(SUM(e.amount),0)
+            FROM festivals fv
+            LEFT JOIN expense_transactions e ON e.festival_id=fv.id AND e.fy=%s
+            GROUP BY fv.id, fv.name
+            UNION ALL
+            SELECT 'General / No Festival',
+                   COALESCE(SUM(i.total_amount),0), 0
+            FROM income_transactions i WHERE i.festival_id IS NULL AND i.fy=%s
+            UNION ALL
+            SELECT 'General / No Festival',
+                   0, COALESCE(SUM(e.amount),0)
+            FROM expense_transactions e WHERE e.festival_id IS NULL AND e.fy=%s
+            ORDER BY 1
+        """, (fy_str, fy_str, fy_str, fy_str))
+        raw = _rows(c)
+    agg = {}
+    for r in raw:
+        k = r["festival"]
+        if k not in agg:
+            agg[k] = {"festival": k, "income": 0.0, "expenses": 0.0}
+        agg[k]["income"]   += float(r["income"])
+        agg[k]["expenses"] += float(r["expenses"])
+    result = sorted(agg.values(), key=lambda x: x["festival"])
+    for r in result:
+        r["balance"] = r["income"] - r["expenses"]
+    return [r for r in result if r["income"] > 0 or r["expenses"] > 0]
+
+def _ledger_cashbook(fy_str: str, date_from=None, date_to=None, fund_id=None) -> list:
+    """All transactions (income + expenses) in date order."""
+    params_i = [fy_str]
+    params_e = [fy_str]
+    where_i = where_e = ""
+    if date_from:
+        where_i += " AND i.txn_date >= %s"; params_i.append(date_from)
+        where_e += " AND e.txn_date >= %s"; params_e.append(date_from)
+    if date_to:
+        where_i += " AND i.txn_date <= %s"; params_i.append(date_to)
+        where_e += " AND e.txn_date <= %s"; params_e.append(date_to)
+    if fund_id:
+        where_i += " AND i.fund_source_id = %s"; params_i.append(fund_id)
+        where_e += " AND e.fund_source_id = %s"; params_e.append(fund_id)
+
+    sql = f"""
+        SELECT i.txn_date, 'INCOME' txn_type,
+               i.donor_name description, NULL paid_to,
+               i.total_amount amount, 0::numeric expense,
+               fs.code fund_code, COALESCE(fv.name,'') festival,
+               i.income_type sub_type, i.payment_mode
+        FROM income_transactions i
+        JOIN fund_sources fs ON fs.id=i.fund_source_id
+        LEFT JOIN festivals fv ON fv.id=i.festival_id
+        WHERE i.fy=%s {where_i}
+        UNION ALL
+        SELECT e.txn_date, 'EXPENSE',
+               COALESCE(e.description,''), e.paid_to,
+               0, e.amount,
+               fs.code, COALESCE(fv.name,''),
+               mh.code, e.payment_mode
+        FROM expense_transactions e
+        JOIN fund_sources fs ON fs.id=e.fund_source_id
+        JOIN major_heads mh ON mh.id=e.major_head_id
+        LEFT JOIN festivals fv ON fv.id=e.festival_id
+        WHERE e.fy=%s {where_e}
+        ORDER BY txn_date, txn_type
+    """
+    with _cursor() as c:
+        c.execute(sql, params_i + params_e)
+        return _rows(c)
+
+
 # ── Edit / Void helpers ────────────────────────────────────────────────────────
 
 def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
@@ -561,7 +677,7 @@ def render_expense_entry(user: str):
     fest_by_id   = {f["id"]: f for f in fest_list}
     fest_by_code = {f["code"]: f["id"] for f in fest_list}
 
-    tabs = st.tabs(["✏️ New Expense","👤 Manikandan A/C","📥 Import Excel","📌 Standing Amts","🕐 Recent","🔧 Edit/Void"])
+    tabs = st.tabs(["✏️ New Expense","👤 Manikandan A/C","📥 Import Excel","📌 Standing Amts","🕐 Recent","📒 Ledger","🔧 Edit/Void"])
 
     # ═══════════════════════════════════════════════════════════
     # TAB 1 — New Expense
@@ -960,9 +1076,118 @@ def render_expense_entry(user: str):
             </div>""", unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════════
-    # TAB 6 — Edit / Void
+    # TAB 6 — Ledger
     # ═══════════════════════════════════════════════════════════
     with tabs[5]:
+        st.markdown("#### 📒 Ledger — FY Summary & Cash Book")
+
+        import pandas as pd
+
+        # FY selector
+        cur_fy = _fy(date.today())
+        yr = int(cur_fy[:4])
+        fy_opts = [cur_fy, f"{yr-1}-{str(yr)[2:]}", f"{yr+1}-{str(yr+2)[2:]}"]
+        led_fy = st.selectbox("Financial Year", fy_opts, key="led_fy")
+
+        sub = st.radio("View", ["Fund-wise Summary","Festival-wise Summary","Cash Book"],
+                       horizontal=True, key="led_view")
+
+        # ── Fund-wise summary ───────────────────────────────────
+        if sub == "Fund-wise Summary":
+            try:
+                rows_f = _ledger_fund_summary(led_fy)
+            except Exception as ex:
+                st.error(f"Error: {ex}"); rows_f = []
+            if not rows_f:
+                st.info("No data for this FY.")
+            else:
+                df_f = pd.DataFrame([{
+                    "Fund":     r["fund"],
+                    "Name":     r["fund_name"],
+                    "Income ₹": f"{r['income']:,.2f}",
+                    "Expenses ₹": f"{r['expenses']:,.2f}",
+                    "Balance ₹": f"{r['balance']:,.2f}",
+                } for r in rows_f])
+                st.dataframe(df_f, width='stretch', hide_index=True)
+                tot_inc = sum(r["income"]   for r in rows_f)
+                tot_exp = sum(r["expenses"] for r in rows_f)
+                bal     = tot_inc - tot_exp
+                bal_color = "#166534" if bal >= 0 else "#991b1b"
+                st.markdown(f"""
+                <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
+                            padding:.8rem 1.2rem;margin-top:.5rem;display:flex;gap:2rem">
+                  <div><div style="font-size:.72rem;color:#64748b">TOTAL INCOME</div>
+                       <div style="font-weight:700;font-size:1.1rem">₹{tot_inc:,.2f}</div></div>
+                  <div><div style="font-size:.72rem;color:#64748b">TOTAL EXPENSES</div>
+                       <div style="font-weight:700;font-size:1.1rem">₹{tot_exp:,.2f}</div></div>
+                  <div><div style="font-size:.72rem;color:#64748b">NET BALANCE</div>
+                       <div style="font-weight:700;font-size:1.1rem;color:{bal_color}">₹{bal:,.2f}</div></div>
+                </div>""", unsafe_allow_html=True)
+
+        # ── Festival-wise summary ───────────────────────────────
+        elif sub == "Festival-wise Summary":
+            try:
+                rows_fv = _ledger_festival_summary(led_fy)
+            except Exception as ex:
+                st.error(f"Error: {ex}"); rows_fv = []
+            if not rows_fv:
+                st.info("No data for this FY.")
+            else:
+                df_fv = pd.DataFrame([{
+                    "Festival":   r["festival"],
+                    "Income ₹":   f"{r['income']:,.2f}",
+                    "Expenses ₹": f"{r['expenses']:,.2f}",
+                    "Balance ₹":  f"{r['balance']:,.2f}",
+                } for r in rows_fv])
+                st.dataframe(df_fv, width='stretch', hide_index=True)
+
+        # ── Cash Book ───────────────────────────────────────────
+        else:
+            fc1, fc2, fc3 = st.columns([1.2, 1.2, 1.6])
+            with fc1:
+                cb_from = st.date_input("From", value=None, key="cb_from")
+            with fc2:
+                cb_to   = st.date_input("To",   value=None, key="cb_to")
+            with fc3:
+                fund_opts_l = {None: "All Funds"} | {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
+                cb_fund = st.selectbox("Fund", list(fund_opts_l),
+                                       format_func=lambda x: fund_opts_l[x], key="cb_fund")
+
+            if st.button("🔍 Load Cash Book", key="cb_load"):
+                try:
+                    cb_rows = _ledger_cashbook(led_fy, cb_from, cb_to, cb_fund)
+                    st.session_state["cb_rows"] = cb_rows
+                except Exception as ex:
+                    st.error(f"Error: {ex}")
+
+            cb_rows = st.session_state.get("cb_rows")
+            if cb_rows is not None:
+                if not cb_rows:
+                    st.info("No transactions found.")
+                else:
+                    running = 0.0
+                    table_rows = []
+                    for r in cb_rows:
+                        inc = float(r["amount"])
+                        exp = float(r["expense"])
+                        running += inc - exp
+                        table_rows.append({
+                            "Date":    r["txn_date"].strftime("%d %b %Y"),
+                            "Type":    r["txn_type"],
+                            "Fund":    r["fund_code"],
+                            "Festival": r["festival"],
+                            "Description": r["description"][:40],
+                            "Income ₹":  f"{inc:,.2f}" if inc else "",
+                            "Expense ₹": f"{exp:,.2f}" if exp else "",
+                            "Balance ₹": f"{running:,.2f}",
+                        })
+                    st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
+                    st.caption(f"{len(cb_rows)} transactions")
+
+    # ═══════════════════════════════════════════════════════════
+    # TAB 7 — Edit / Void
+    # ═══════════════════════════════════════════════════════════
+    with tabs[6]:
         st.markdown("#### 🔧 Edit or Void an Expense")
 
         # ── Step 1: Search ──────────────────────────────────────
