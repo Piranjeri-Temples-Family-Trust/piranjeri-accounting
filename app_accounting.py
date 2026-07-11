@@ -64,7 +64,7 @@ with st.sidebar:
     st.markdown("**Accounting System**")
     st.divider()
     st.markdown(f"👤 Logged in as **{st.session_state.user}**")
-    if st.button("Logout", width="stretch"):
+    if st.button("Logout"):
         st.session_state.logged_in   = False
         st.session_state.user        = None
         st.session_state.last_active = None
@@ -73,6 +73,10 @@ with st.sidebar:
     st.caption("FY 2025-26 (Apr 2025 – Mar 2026)")
 
 # ── Main content ──────────────────────────────────────────────────────────────
-from expense_entry import render_expense_entry
-
-render_expense_entry(st.session_state.user)
+try:
+    from expense_entry import render_expense_entry
+    render_expense_entry(st.session_state.user)
+except Exception as _e:
+    import traceback
+    st.error(f"Startup error: {_e}")
+    st.code(traceback.format_exc())
