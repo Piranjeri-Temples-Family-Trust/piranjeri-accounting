@@ -373,7 +373,6 @@ def _update_expense(txn_id: int, upd: dict):
 
 def _void_expense(txn_id: int):
     with _cursor() as c:
-        c.execute("DELETE FROM ledger_entries WHERE txn_id=%s", (txn_id,))
         c.execute("DELETE FROM expense_transactions WHERE id=%s", (txn_id,))
 
 
