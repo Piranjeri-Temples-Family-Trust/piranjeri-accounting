@@ -473,7 +473,7 @@ def render_expense_entry(user: str):
                     if st.button(f"₹{s['default_amount']:,.0f}  {s['description']}",
                                  key=f"sa_h_{s['major_head_id']}_{s.get('festival_id','g')}_{i}",
                                  use_container_width=True):
-                        st.session_state["ne_amount"] = float(s["default_amount"])
+                        st.session_state["_pf_amount"] = float(s["default_amount"])
                         st.rerun()
 
         # Row 4 — Cheque / Description / Paid To
