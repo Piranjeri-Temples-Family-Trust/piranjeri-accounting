@@ -186,6 +186,63 @@ def _trial_balance(date_from, date_to):
         inc_rows = _rows(c)
     return exp_rows, inc_rows
 
+# ── All Expenses ledger (no account filter) ────────────────────────────────────
+def _all_expenses_ledger(date_from, date_to):
+    with _cursor() as c:
+        c.execute("""
+            SELECT et.id, et.txn_date, et.description, et.paid_to,
+                   et.amount, et.payment_mode,
+                   mh.code mh_code, mh.name mh_name,
+                   fv.name festival_name
+            FROM expense_transactions et
+            JOIN major_heads mh ON mh.id=et.major_head_id
+            LEFT JOIN festivals fv ON fv.id=et.festival_id
+            WHERE et.txn_date >= %s AND et.txn_date <= %s
+            ORDER BY et.txn_date, mh.code, et.id
+        """, (date_from, date_to))
+        return _rows(c)
+
+# ── Receipts table (Piranjeri-Receipts app) ────────────────────────────────────
+def _receipts_summary(date_from, date_to):
+    """Grouped by purpose from the receipts table. Returns [] on any error."""
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT purpose, COUNT(*) cnt, SUM(amount) total
+                FROM receipts
+                WHERE (status IS NULL OR status != 'CANCELLED')
+                  AND issue_date >= %s AND issue_date <= %s
+                GROUP BY purpose ORDER BY total DESC
+            """, (str(date_from), str(date_to)))
+            return _rows(c)
+    except Exception:
+        return []
+
+def _receipts_ledger(date_from, date_to, purpose=None):
+    """Line-level receipts. Filter by purpose if given."""
+    try:
+        with _cursor() as c:
+            if purpose:
+                c.execute("""
+                    SELECT serial, issue_date, name, amount, purpose, payment
+                    FROM receipts
+                    WHERE (status IS NULL OR status != 'CANCELLED')
+                      AND issue_date >= %s AND issue_date <= %s
+                      AND purpose = %s
+                    ORDER BY issue_date, serial
+                """, (str(date_from), str(date_to), purpose))
+            else:
+                c.execute("""
+                    SELECT serial, issue_date, name, amount, purpose, payment
+                    FROM receipts
+                    WHERE (status IS NULL OR status != 'CANCELLED')
+                      AND issue_date >= %s AND issue_date <= %s
+                    ORDER BY issue_date, serial
+                """, (str(date_from), str(date_to)))
+            return _rows(c)
+    except Exception:
+        return []
+
 # ── Edit / Void ────────────────────────────────────────────────────────────────
 def _search_expenses(fy_str, q="", limit=50):
     with _cursor() as c:
@@ -273,6 +330,44 @@ def _expense_csv(txns, account_name, d_from, d_to):
     w.writerow(["","","","","TOTAL", f"{running:.2f}",""])
     return out.getvalue()
 
+def _all_expenses_csv(txns, d_from, d_to):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f"All Expense Accounts",
+                f"Period: {d_from.strftime('%d %b %Y')} to {d_to.strftime('%d %b %Y')}"])
+    w.writerow([])
+    w.writerow(["Date","Account Code","Account Name","Description","Paid To","Festival","Mode","Amount ₹"])
+    for r in txns:
+        w.writerow([
+            r["txn_date"].strftime("%d %b %Y"),
+            r.get("mh_code",""),
+            r.get("mh_name",""),
+            r.get("description",""),
+            r.get("paid_to",""),
+            r.get("festival_name",""),
+            r.get("payment_mode",""),
+            f"{float(r['amount']):.2f}",
+        ])
+    return out.getvalue()
+
+def _receipts_csv(txns, d_from, d_to):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f"Receipts / Donations",
+                f"Period: {d_from.strftime('%d %b %Y')} to {d_to.strftime('%d %b %Y')}"])
+    w.writerow([])
+    w.writerow(["Receipt No","Date","Donor Name","Purpose","Mode","Amount ₹"])
+    for r in txns:
+        w.writerow([
+            r.get("serial",""),
+            r.get("issue_date",""),
+            r.get("name",""),
+            r.get("purpose",""),
+            r.get("payment",""),
+            f"{float(r['amount']):.2f}",
+        ])
+    return out.getvalue()
+
 def _income_csv(txns, account_name, d_from, d_to):
     out = io.StringIO()
     w = csv.writer(out)
@@ -296,6 +391,37 @@ def _income_csv(txns, account_name, d_from, d_to):
     w.writerow([])
     w.writerow(["","","","","TOTAL", f"{running:.2f}",""])
     return out.getvalue()
+
+# ── Festival breakdown widget (reused in multiple tabs) ────────────────────────
+def _festival_breakdown(txns, amt_key):
+    """Show festival subtotals for a list of transaction dicts."""
+    fest_totals = defaultdict(float)
+    grand = 0.0
+    for r in txns:
+        a = float(r.get(amt_key, 0))
+        grand += a
+        fest_totals[r.get("festival_name") or "General (No Festival)"] += a
+    if not fest_totals:
+        return
+    st.markdown("**Festival-wise Breakdown**")
+    fb_rows = ""
+    for fname, ftotal in sorted(fest_totals.items(), key=lambda x: -x[1]):
+        pct = ftotal / grand * 100 if grand else 0
+        fb_rows += (f"<tr style='border-bottom:1px solid #e0e7ff'>"
+                    f"<td style='padding:5px 8px'>{fname}</td>"
+                    f"<td style='text-align:right;padding:5px 8px'>₹{ftotal:,.2f}</td>"
+                    f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
+                    f"</tr>")
+    st.markdown(f"""
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
+    <thead><tr style="background:#7c3aed;color:white">
+      <th style="padding:6px 8px">Festival</th>
+      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+      <th style="text-align:right;padding:6px 8px">%</th>
+    </tr></thead>
+    <tbody>{fb_rows}</tbody>
+    </table>
+    """, unsafe_allow_html=True)
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 def _css():
@@ -567,78 +693,134 @@ def render_expense_entry(user: str):
         st.markdown("#### 📒 Account Ledger")
 
         acct_type = st.radio("Account Type",
-                             ["Expense Account (E-01, E-02 ...)","Income / Fund Account"],
+                             ["Expense Account (E-01, E-02 ...)","Income / Fund Account",
+                              "Receipts / Donations (Apr 2026+)"],
                              horizontal=True, key="al_type")
 
-        # Date range — same style as Trial Balance
+        # Date range
         _today = date.today()
         _fy_yr = _today.year if _today.month >= 4 else _today.year - 1
         al1, al2 = st.columns(2)
         with al1: d_from = st.date_input("From", value=date(_fy_yr, 4, 1), key="al_from")
         with al2: d_to   = st.date_input("To",   value=_today, key="al_to")
 
+        # ── EXPENSE ACCOUNTS ───────────────────────────────────────────────────
         if acct_type.startswith("Expense"):
-            mh_opts2 = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
-            sel_mh = st.selectbox("Select Expense Account", list(mh_opts2),
-                                  format_func=lambda x: mh_opts2[x], key="al_mh")
-            if st.button("🔍 Show Ledger", key="al_exp"):
-                txns = _expense_ledger(sel_mh, d_from, d_to)
-                if not txns:
-                    st.info("No transactions for this period.")
-                else:
-                    acct_label = mh_opts2[sel_mh]
-                    running = 0.0
-                    rows_html = ""
-                    for r in txns:
-                        amt = float(r["amount"])
-                        running += amt
-                        desc = r.get("description") or ""
-                        fest = r.get("festival_name") or ""
-                        if fest: desc = f"{desc} [{fest}]".strip(" []") if desc else fest
-                        ref  = r.get("paid_to") or r.get("payment_mode") or ""
-                        rows_html += _tr(r["txn_date"].strftime("%d %b %Y"),
-                                         desc, ref,
-                                         f"₹{amt:,.2f}", "", f"₹{running:,.2f}")
-                    foot = (f"<tfoot><tr style='font-weight:700;background:#fee2e2'>"
-                            f"<td colspan='3' style='padding:6px 8px'>Total</td>"
-                            f"<td style='text-align:right;padding:6px 8px'>₹{running:,.2f}</td>"
-                            f"<td></td><td></td></tr></tfoot>")
-                    _ledger_table(rows_html, foot)
-                    st.caption(f"{len(txns)} transactions · Total ₹{running:,.2f}")
+            exp_scope = st.radio("View", ["Single Account", "ALL Accounts"],
+                                 horizontal=True, key="al_scope")
 
-                    # ── Festival breakdown ──────────────────────────────────
-                    st.markdown("**Festival-wise Breakdown**")
-                    fest_totals = defaultdict(float)
-                    for r in txns:
-                        key = r.get("festival_name") or "General (No Festival)"
-                        fest_totals[key] += float(r["amount"])
-                    fb_rows = ""
-                    for fname, ftotal in sorted(fest_totals.items(), key=lambda x: -x[1]):
-                        pct = ftotal / running * 100 if running else 0
-                        fb_rows += (f"<tr style='border-bottom:1px solid #fecaca'>"
-                                    f"<td style='padding:5px 8px'>{fname}</td>"
-                                    f"<td style='text-align:right;padding:5px 8px'>₹{ftotal:,.2f}</td>"
-                                    f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
-                                    f"</tr>")
-                    st.markdown(f"""
-                    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
-                    <thead><tr style="background:#7c3aed;color:white">
-                      <th style="padding:6px 8px">Festival</th>
-                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                      <th style="text-align:right;padding:6px 8px">%</th>
-                    </tr></thead>
-                    <tbody>{fb_rows}</tbody>
-                    </table>
-                    """, unsafe_allow_html=True)
+            if exp_scope == "Single Account":
+                mh_opts2 = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
+                sel_mh = st.selectbox("Select Expense Account", list(mh_opts2),
+                                      format_func=lambda x: mh_opts2[x], key="al_mh")
+                if st.button("🔍 Show Ledger", key="al_exp"):
+                    txns = _expense_ledger(sel_mh, d_from, d_to)
+                    if not txns:
+                        st.info("No transactions for this period.")
+                    else:
+                        acct_label = mh_opts2[sel_mh]
+                        running = 0.0
+                        rows_html = ""
+                        for r in txns:
+                            amt = float(r["amount"])
+                            running += amt
+                            desc = r.get("description") or ""
+                            fest = r.get("festival_name") or ""
+                            if fest: desc = f"{desc} [{fest}]".strip(" []") if desc else fest
+                            ref  = r.get("paid_to") or r.get("payment_mode") or ""
+                            rows_html += _tr(r["txn_date"].strftime("%d %b %Y"),
+                                             desc, ref,
+                                             f"₹{amt:,.2f}", "", f"₹{running:,.2f}")
+                        foot = (f"<tfoot><tr style='font-weight:700;background:#fee2e2'>"
+                                f"<td colspan='3' style='padding:6px 8px'>Total</td>"
+                                f"<td style='text-align:right;padding:6px 8px'>₹{running:,.2f}</td>"
+                                f"<td></td><td></td></tr></tfoot>")
+                        _ledger_table(rows_html, foot)
+                        st.caption(f"{len(txns)} transactions · Total ₹{running:,.2f}")
+                        _festival_breakdown(txns, "amount")
+                        csv_data = _expense_csv(txns, acct_label, d_from, d_to)
+                        fname_csv = (f"{acct_label.split('—')[0].strip()}_"
+                                     f"{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv")
+                        st.download_button("⬇️ Download CSV", data=csv_data,
+                                           file_name=fname_csv, mime="text/csv")
 
-                    # ── CSV download ────────────────────────────────────────
-                    csv_data = _expense_csv(txns, acct_label, d_from, d_to)
-                    fname_csv = (f"{mh_opts2[sel_mh].split('—')[0].strip()}_"
-                                 f"{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv")
-                    st.download_button("⬇️ Download CSV", data=csv_data,
-                                       file_name=fname_csv, mime="text/csv")
+            else:  # ALL Accounts
+                if st.button("🔍 Show All Expenses", key="al_all"):
+                    txns = _all_expenses_ledger(d_from, d_to)
+                    if not txns:
+                        st.info("No transactions for this period.")
+                    else:
+                        grand_total = sum(float(r["amount"]) for r in txns)
+                        # Table with account column
+                        rows_html = ""
+                        for r in txns:
+                            amt = float(r["amount"])
+                            desc = r.get("description") or ""
+                            fest = r.get("festival_name") or ""
+                            accode = f"{r.get('mh_code','')} {r.get('mh_name','')}"
+                            rows_html += (
+                                f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                                f"<td style='padding:5px 8px'>{r['txn_date'].strftime('%d %b %Y')}</td>"
+                                f"<td style='padding:5px 8px;color:#1e40af;font-weight:600'>{r.get('mh_code','')}</td>"
+                                f"<td style='padding:5px 8px'>{desc}</td>"
+                                f"<td style='padding:5px 8px;color:#64748b'>{fest}</td>"
+                                f"<td style='padding:5px 8px;color:#64748b'>{r.get('paid_to','')}</td>"
+                                f"<td style='text-align:right;padding:5px 8px;color:#991b1b'>₹{amt:,.2f}</td>"
+                                f"</tr>"
+                            )
+                        foot = (f"<tfoot><tr style='font-weight:700;background:#fee2e2'>"
+                                f"<td colspan='5' style='padding:6px 8px'>GRAND TOTAL</td>"
+                                f"<td style='text-align:right;padding:6px 8px'>₹{grand_total:,.2f}</td>"
+                                f"</tr></tfoot>")
+                        st.markdown(f"""
+                        <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+                        <thead><tr style="background:#1e40af;color:white">
+                          <th style="padding:6px 8px">Date</th>
+                          <th style="padding:6px 8px">Account</th>
+                          <th style="padding:6px 8px">Description</th>
+                          <th style="padding:6px 8px">Festival</th>
+                          <th style="padding:6px 8px">Paid To</th>
+                          <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                        </tr></thead>
+                        <tbody>{rows_html}</tbody>
+                        {foot}
+                        </table>
+                        """, unsafe_allow_html=True)
+                        st.caption(f"{len(txns)} transactions · Grand Total ₹{grand_total:,.2f}")
 
-        else:
+                        # Account-wise subtotals
+                        st.markdown("**Account-wise Subtotals**")
+                        acct_totals = defaultdict(float)
+                        for r in txns:
+                            acct_totals[f"{r.get('mh_code','')} — {r.get('mh_name','')}"] += float(r["amount"])
+                        at_rows = ""
+                        for aname, atotal in sorted(acct_totals.items()):
+                            pct = atotal / grand_total * 100 if grand_total else 0
+                            at_rows += (f"<tr style='border-bottom:1px solid #fecaca'>"
+                                        f"<td style='padding:5px 8px'>{aname}</td>"
+                                        f"<td style='text-align:right;padding:5px 8px'>₹{atotal:,.2f}</td>"
+                                        f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
+                                        f"</tr>")
+                        st.markdown(f"""
+                        <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
+                        <thead><tr style="background:#991b1b;color:white">
+                          <th style="padding:6px 8px">Account</th>
+                          <th style="text-align:right;padding:6px 8px">Total ₹</th>
+                          <th style="text-align:right;padding:6px 8px">%</th>
+                        </tr></thead>
+                        <tbody>{at_rows}</tbody>
+                        </table>
+                        """, unsafe_allow_html=True)
+
+                        _festival_breakdown(txns, "amount")
+
+                        csv_data = _all_expenses_csv(txns, d_from, d_to)
+                        fname_csv = f"ALL_Expenses_{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv"
+                        st.download_button("⬇️ Download CSV", data=csv_data,
+                                           file_name=fname_csv, mime="text/csv")
+
+        # ── INCOME / FUND ACCOUNTS ─────────────────────────────────────────────
+        elif acct_type.startswith("Income"):
             fs_opts2 = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
             sel_fs = st.selectbox("Select Fund Account", list(fs_opts2),
                                   format_func=lambda x: fs_opts2[x], key="al_fs")
@@ -667,36 +849,90 @@ def render_expense_entry(user: str):
                             f"<td></td></tr></tfoot>")
                     _ledger_table(rows_html, foot)
                     st.caption(f"{len(txns)} transactions · Total ₹{running:,.2f}")
-
-                    # ── Festival breakdown ──────────────────────────────────
-                    st.markdown("**Festival-wise Breakdown**")
-                    fest_totals = defaultdict(float)
-                    for r in txns:
-                        key = r.get("festival_name") or "General (No Festival)"
-                        fest_totals[key] += float(r["total_amount"])
-                    fb_rows = ""
-                    for fname, ftotal in sorted(fest_totals.items(), key=lambda x: -x[1]):
-                        pct = ftotal / running * 100 if running else 0
-                        fb_rows += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
-                                    f"<td style='padding:5px 8px'>{fname}</td>"
-                                    f"<td style='text-align:right;padding:5px 8px'>₹{ftotal:,.2f}</td>"
-                                    f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
-                                    f"</tr>")
-                    st.markdown(f"""
-                    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
-                    <thead><tr style="background:#7c3aed;color:white">
-                      <th style="padding:6px 8px">Festival</th>
-                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                      <th style="text-align:right;padding:6px 8px">%</th>
-                    </tr></thead>
-                    <tbody>{fb_rows}</tbody>
-                    </table>
-                    """, unsafe_allow_html=True)
-
-                    # ── CSV download ────────────────────────────────────────
+                    _festival_breakdown(txns, "total_amount")
                     csv_data = _income_csv(txns, acct_label, d_from, d_to)
                     fname_csv = (f"{fs_opts2[sel_fs].split('—')[0].strip()}_"
                                  f"{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv")
+                    st.download_button("⬇️ Download CSV", data=csv_data,
+                                       file_name=fname_csv, mime="text/csv")
+
+        # ── RECEIPTS (Apr 2026+) ───────────────────────────────────────────────
+        else:
+            st.caption("Data from Piranjeri-Receipts app — automatically synced (same database)")
+            purpose_opts = ["ALL"] + [
+                "Nithya Pooja","Garuda Seva","Pradhosham","Sangabhishekam",
+                "Panguni uthiram","Annadhanam","Kumbhabhishekam","Varushabhishekam",
+                "Temple Renovation","General Donation","Bank Interest"
+            ]
+            sel_purpose = st.selectbox("Purpose / Festival", purpose_opts, key="al_purpose")
+
+            if st.button("🔍 Show Receipts", key="al_rec"):
+                purpose_filter = None if sel_purpose == "ALL" else sel_purpose
+                txns = _receipts_ledger(d_from, d_to, purpose_filter)
+                summary = _receipts_summary(d_from, d_to)
+
+                if not txns and not summary:
+                    st.warning("No receipts found — the receipts table may have a different name. "
+                               "Check db.py in Piranjeri-Receipts repo for the actual table name.")
+                elif not txns:
+                    st.info("No receipts for this purpose / period.")
+                else:
+                    total = sum(float(r["amount"]) for r in txns)
+                    rows_html = ""
+                    for r in txns:
+                        amt = float(r["amount"])
+                        rows_html += (
+                            f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                            f"<td style='padding:5px 8px'>{r.get('serial','')}</td>"
+                            f"<td style='padding:5px 8px'>{r.get('issue_date','')}</td>"
+                            f"<td style='padding:5px 8px'>{r.get('name','')}</td>"
+                            f"<td style='padding:5px 8px'>{r.get('purpose','')}</td>"
+                            f"<td style='padding:5px 8px;color:#64748b'>{r.get('payment','')}</td>"
+                            f"<td style='text-align:right;padding:5px 8px;color:#166534'>₹{amt:,.2f}</td>"
+                            f"</tr>"
+                        )
+                    foot = (f"<tfoot><tr style='font-weight:700;background:#dcfce7'>"
+                            f"<td colspan='5' style='padding:6px 8px'>TOTAL</td>"
+                            f"<td style='text-align:right;padding:6px 8px'>₹{total:,.2f}</td>"
+                            f"</tr></tfoot>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+                    <thead><tr style="background:#166534;color:white">
+                      <th style="padding:6px 8px">Receipt No</th>
+                      <th style="padding:6px 8px">Date</th>
+                      <th style="padding:6px 8px">Donor</th>
+                      <th style="padding:6px 8px">Purpose</th>
+                      <th style="padding:6px 8px">Mode</th>
+                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>
+                    {foot}
+                    </table>
+                    """, unsafe_allow_html=True)
+                    st.caption(f"{len(txns)} receipts · Total ₹{total:,.2f}")
+
+                    if summary and sel_purpose == "ALL":
+                        st.markdown("**Purpose-wise Summary**")
+                        sb_rows = ""
+                        for r in summary:
+                            sb_rows += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
+                                        f"<td style='padding:5px 8px'>{r['purpose']}</td>"
+                                        f"<td style='text-align:right;padding:5px 8px'>{r['cnt']}</td>"
+                                        f"<td style='text-align:right;padding:5px 8px'>₹{float(r['total']):,.2f}</td>"
+                                        f"</tr>")
+                        st.markdown(f"""
+                        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                        <thead><tr style="background:#166534;color:white">
+                          <th style="padding:6px 8px">Purpose</th>
+                          <th style="text-align:right;padding:6px 8px">Count</th>
+                          <th style="text-align:right;padding:6px 8px">Total ₹</th>
+                        </tr></thead>
+                        <tbody>{sb_rows}</tbody>
+                        </table>
+                        """, unsafe_allow_html=True)
+
+                    csv_data = _receipts_csv(txns, d_from, d_to)
+                    fname_csv = f"Receipts_{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv"
                     st.download_button("⬇️ Download CSV", data=csv_data,
                                        file_name=fname_csv, mime="text/csv")
 
@@ -758,24 +994,63 @@ def render_expense_entry(user: str):
                                       f"<td style='padding:5px 8px'>{r['code']} {r['name']}</td>"
                                       f"<td style='text-align:right;padding:5px 8px'>₹{amt:,.2f}</td>"
                                       f"</tr>")
-                if rows_html:
+
+                # Also fetch receipts for this period
+                rec_summary = _receipts_summary(tb_from, tb_to)
+                total_rec = sum(float(r["total"]) for r in rec_summary) if rec_summary else 0.0
+                total_inc_all = total_inc  # will be updated below
+
+                if rows_html or rec_summary:
+                    # Fund-based income (income_transactions)
+                    if rows_html:
+                        st.markdown(f"""
+                        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                        <thead><tr style="background:#166534;color:white">
+                          <th style="padding:6px 8px">Fund (Historical)</th>
+                          <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                        </tr></thead>
+                        <tbody>{rows_html}</tbody>
+                        <tfoot><tr style="font-weight:700;background:#dcfce7">
+                          <td style="padding:6px 8px">Sub-total</td>
+                          <td style="text-align:right;padding:6px 8px">₹{total_inc:,.2f}</td>
+                        </tr></tfoot>
+                        </table>
+                        """, unsafe_allow_html=True)
+                    # Receipts (receipts table)
+                    if rec_summary:
+                        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+                        rec_rows = ""
+                        for r in rec_summary:
+                            rec_rows += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
+                                         f"<td style='padding:5px 8px'>{r['purpose']}"
+                                         f" <span style='color:#64748b;font-size:.75rem'>({int(r['cnt'])} receipts)</span></td>"
+                                         f"<td style='text-align:right;padding:5px 8px'>₹{float(r['total']):,.2f}</td>"
+                                         f"</tr>")
+                        st.markdown(f"""
+                        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                        <thead><tr style="background:#0d9488;color:white">
+                          <th style="padding:6px 8px">Receipts / Donations</th>
+                          <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                        </tr></thead>
+                        <tbody>{rec_rows}</tbody>
+                        <tfoot><tr style="font-weight:700;background:#ccfbf1">
+                          <td style="padding:6px 8px">Sub-total</td>
+                          <td style="text-align:right;padding:6px 8px">₹{total_rec:,.2f}</td>
+                        </tr></tfoot>
+                        </table>
+                        """, unsafe_allow_html=True)
+                    total_inc_all = total_inc + total_rec
                     st.markdown(f"""
-                    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
-                    <thead><tr style="background:#166534;color:white">
-                      <th style="padding:6px 8px">Fund</th>
-                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                    </tr></thead>
-                    <tbody>{rows_html}</tbody>
-                    <tfoot><tr style="font-weight:700;background:#dcfce7">
-                      <td style="padding:6px 8px">TOTAL INCOME</td>
-                      <td style="text-align:right;padding:6px 8px">₹{total_inc:,.2f}</td>
-                    </tr></tfoot>
-                    </table>
-                    """, unsafe_allow_html=True)
+                    <div style="background:#dcfce7;border-radius:6px;padding:.5rem .8rem;
+                                font-weight:700;margin-top:.4rem">
+                      TOTAL INCOME &nbsp;·&nbsp; ₹{total_inc_all:,.2f}
+                    </div>""", unsafe_allow_html=True)
                 else:
                     st.info("No income.")
+                    total_inc_all = 0.0
 
-            net = total_inc - total_exp
+            net = (total_inc + total_rec) - total_exp
+            total_inc = total_inc + total_rec  # for summary card below
             net_color = "#166534" if net >= 0 else "#991b1b"
             net_label = "SURPLUS" if net >= 0 else "DEFICIT"
             st.markdown(f"""
