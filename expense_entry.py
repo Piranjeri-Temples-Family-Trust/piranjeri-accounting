@@ -592,6 +592,75 @@ def _ledger_cashbook(fy_str: str, date_from=None, date_to=None, fund_id=None) ->
         return _rows(c)
 
 
+def _ledger_fund_transactions(fy_str: str, fund_code: str) -> list:
+    """All transactions (income + expense) for one fund, with unique IDs."""
+    with _cursor() as c:
+        c.execute("""
+            SELECT 'EXP-'||e.id::text txn_id, e.txn_date, 'EXPENSE' txn_type,
+                   mh.code||' — '||mh.name head,
+                   COALESCE(fv.name,'General') festival,
+                   COALESCE(e.description,'') description,
+                   COALESCE(e.paid_to,'') paid_to,
+                   e.payment_mode,
+                   0::numeric income, e.amount expense
+            FROM expense_transactions e
+            JOIN fund_sources fs ON fs.id=e.fund_source_id
+            JOIN major_heads mh ON mh.id=e.major_head_id
+            LEFT JOIN festivals fv ON fv.id=e.festival_id
+            WHERE e.fy=%s AND fs.code=%s
+            UNION ALL
+            SELECT 'INC-'||i.id::text, i.txn_date, 'INCOME',
+                   i.income_type, COALESCE(fv.name,'General'),
+                   COALESCE(i.donor_name,''), '', i.payment_mode,
+                   i.total_amount, 0
+            FROM income_transactions i
+            JOIN fund_sources fs ON fs.id=i.fund_source_id
+            LEFT JOIN festivals fv ON fv.id=i.festival_id
+            WHERE i.fy=%s AND fs.code=%s
+            ORDER BY txn_date, txn_type DESC
+        """, (fy_str, fund_code, fy_str, fund_code))
+        return _rows(c)
+
+def _ledger_festival_transactions(fy_str: str, festival_name: str) -> list:
+    """All transactions for one festival, with unique IDs."""
+    if festival_name == "General / No Festival":
+        where_e = "e.festival_id IS NULL"
+        where_i = "i.festival_id IS NULL"
+        p_e = [fy_str]
+        p_i = [fy_str]
+    else:
+        where_e = "fv.name=%s"
+        where_i = "fv.name=%s"
+        p_e = [fy_str, festival_name]
+        p_i = [fy_str, festival_name]
+    sql = f"""
+        SELECT 'EXP-'||e.id::text txn_id, e.txn_date, 'EXPENSE' txn_type,
+               fs.code fund,
+               mh.code||' — '||mh.name head,
+               COALESCE(e.description,'') description,
+               COALESCE(e.paid_to,'') paid_to,
+               e.payment_mode,
+               0::numeric income, e.amount expense
+        FROM expense_transactions e
+        JOIN fund_sources fs ON fs.id=e.fund_source_id
+        JOIN major_heads mh ON mh.id=e.major_head_id
+        LEFT JOIN festivals fv ON fv.id=e.festival_id
+        WHERE e.fy=%s AND {where_e}
+        UNION ALL
+        SELECT 'INC-'||i.id::text, i.txn_date, 'INCOME',
+               fs.code, i.income_type,
+               COALESCE(i.donor_name,''), '', i.payment_mode,
+               i.total_amount, 0
+        FROM income_transactions i
+        JOIN fund_sources fs ON fs.id=i.fund_source_id
+        LEFT JOIN festivals fv ON fv.id=i.festival_id
+        WHERE i.fy=%s AND {where_i}
+        ORDER BY txn_date, txn_type DESC
+    """
+    with _cursor() as c:
+        c.execute(sql, p_e + p_i)
+        return _rows(c)
+
 # ── Edit / Void helpers ────────────────────────────────────────────────────────
 
 def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
@@ -1083,6 +1152,42 @@ def render_expense_entry(user: str):
 
         import pandas as pd
 
+        def _show_txn_drilldown(txns: list, title: str):
+            """Render a transaction drilldown table with unique IDs and major-head breakdown."""
+            if not txns:
+                st.info("No transactions found.")
+                return
+            st.markdown(f"**{title}** — {len(txns)} transactions")
+            rows = []
+            for r in txns:
+                inc = float(r["income"])
+                exp = float(r["expense"])
+                rows.append({
+                    "Txn ID":      r["txn_id"],
+                    "Date":        r["txn_date"].strftime("%d %b %Y"),
+                    "Type":        r["txn_type"],
+                    "Head / Type": r["head"],
+                    "Festival":    r["festival"],
+                    "Description": (r.get("description") or "")[:40],
+                    "Paid To":     (r.get("paid_to") or "")[:30],
+                    "Mode":        r.get("payment_mode") or "",
+                    "Income ₹":    f"{inc:,.2f}" if inc else "",
+                    "Expense ₹":   f"{exp:,.2f}" if exp else "",
+                })
+            st.dataframe(pd.DataFrame(rows), hide_index=True)
+            # Major-head expense breakdown
+            exp_only = [r for r in txns if float(r["expense"]) > 0]
+            if exp_only:
+                st.markdown("**Expense breakdown by head:**")
+                bk: dict = {}
+                for r in exp_only:
+                    h = r["head"]
+                    bk[h] = bk.get(h, 0.0) + float(r["expense"])
+                bk_rows = sorted(bk.items(), key=lambda x: -x[1])
+                bk_df = pd.DataFrame([{"Head": h, "Total ₹": f"{v:,.2f}"} for h, v in bk_rows])
+                st.dataframe(bk_df, hide_index=True)
+                st.caption(f"Total expenses: ₹{sum(bk.values()):,.2f}")
+
         # FY selector
         cur_fy = _fy(date.today())
         yr = int(cur_fy[:4])
@@ -1102,11 +1207,11 @@ def render_expense_entry(user: str):
                 st.info("No data for this FY.")
             else:
                 df_f = pd.DataFrame([{
-                    "Fund":     r["fund"],
-                    "Name":     r["fund_name"],
-                    "Income ₹": f"{r['income']:,.2f}",
+                    "Fund":       r["fund"],
+                    "Name":       r["fund_name"],
+                    "Income ₹":   f"{r['income']:,.2f}",
                     "Expenses ₹": f"{r['expenses']:,.2f}",
-                    "Balance ₹": f"{r['balance']:,.2f}",
+                    "Balance ₹":  f"{r['balance']:,.2f}",
                 } for r in rows_f])
                 st.dataframe(df_f, hide_index=True)
                 tot_inc = sum(r["income"]   for r in rows_f)
@@ -1123,6 +1228,18 @@ def render_expense_entry(user: str):
                   <div><div style="font-size:.72rem;color:#64748b">NET BALANCE</div>
                        <div style="font-weight:700;font-size:1.1rem;color:{bal_color}">₹{bal:,.2f}</div></div>
                 </div>""", unsafe_allow_html=True)
+                st.divider()
+                # Drilldown
+                fund_choices = ["— Select a fund to view its transactions —"] + \
+                               [f"{r['fund']} — {r['fund_name']}" for r in rows_f]
+                sel_f = st.selectbox("🔍 Drill into fund:", fund_choices, key="led_fund_drill")
+                if sel_f != fund_choices[0]:
+                    sel_code = sel_f.split(" — ")[0]
+                    try:
+                        drill = _ledger_fund_transactions(led_fy, sel_code)
+                        _show_txn_drilldown(drill, sel_f)
+                    except Exception as ex:
+                        st.error(f"Error: {ex}")
 
         # ── Festival-wise summary ───────────────────────────────
         elif sub == "Festival-wise Summary":
@@ -1140,6 +1257,17 @@ def render_expense_entry(user: str):
                     "Balance ₹":  f"{r['balance']:,.2f}",
                 } for r in rows_fv])
                 st.dataframe(df_fv, hide_index=True)
+                st.divider()
+                # Drilldown
+                fest_choices = ["— Select a festival to view its transactions —"] + \
+                               [r["festival"] for r in rows_fv]
+                sel_fv = st.selectbox("🔍 Drill into festival:", fest_choices, key="led_fest_drill")
+                if sel_fv != fest_choices[0]:
+                    try:
+                        drill_fv = _ledger_festival_transactions(led_fy, sel_fv)
+                        _show_txn_drilldown(drill_fv, sel_fv)
+                    except Exception as ex:
+                        st.error(f"Error: {ex}")
 
         # ── Cash Book ───────────────────────────────────────────
         else:
@@ -1177,12 +1305,12 @@ def render_expense_entry(user: str):
                             "Fund":        r["fund_code"],
                             "Festival":    r["festival"],
                             "Description": r["description"][:40],
-                            "Income":      f"{inc:,.2f}" if inc else "",
-                            "Expense":     f"{exp:,.2f}" if exp else "",
-                            "Balance":     f"{running:,.2f}",
+                            "Income ₹":    f"{inc:,.2f}" if inc else "",
+                            "Expense ₹":   f"{exp:,.2f}" if exp else "",
+                            "Balance ₹":   f"{running:,.2f}",
                         })
                     st.dataframe(pd.DataFrame(table_rows), hide_index=True)
-                    st.caption(f"{len(cb_rows)} transactions")
+                    st.caption(f"{len(cb_rows)} transactions | Running balance: ₹{running:,.2f}")
 
     # ===========================================================
     # TAB 7 -- Edit / Void
