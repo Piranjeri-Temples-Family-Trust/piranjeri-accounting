@@ -186,7 +186,171 @@ def _trial_balance(date_from, date_to):
         inc_rows = _rows(c)
     return exp_rows, inc_rows
 
+
+def _full_tb(date_from, date_to, ob):
+    """
+    Full double-entry trial balance.
+    ob = row from bank_opening_balances.
+    Returns (dr_rows, cr_rows, dr_total, cr_total).
+    Each row: {'account': str, 'amount': float}.
+    """
+    dr_rows, cr_rows = [], []
+    fy_str = _fy(date_from)
+
+    # ── CR SIDE: Opening Fund + Income ────────────────────────────
+    ob_total = float(ob['savings_balance']) + float(ob['fixed_deposit_balance']) + float(ob['cash_balance'])
+    cr_rows.append({'account': 'General Fund — Opening Balance', 'amount': ob_total})
+
+    # Income from income_transactions (historical)
+    with _cursor() as c:
+        c.execute("""
+            SELECT fs.code, fs.name, COALESCE(SUM(it.total_amount),0) total
+            FROM fund_sources fs
+            LEFT JOIN income_transactions it ON it.fund_source_id=fs.id
+              AND it.txn_date >= %s AND it.txn_date <= %s
+            WHERE fs.is_active
+            GROUP BY fs.id, fs.code, fs.name
+            HAVING COALESCE(SUM(it.total_amount),0) > 0
+            ORDER BY fs.code
+        """, (date_from, date_to))
+        for r in _rows(c):
+            cr_rows.append({'account': f"{r['code']} {r['name']}", 'amount': float(r['total'])})
+
+    # Income from receipts table (Apr 2026+)
+    try:
+        rec_sum = _receipts_summary(date_from, date_to)
+        for r in rec_sum:
+            if float(r.get('total', 0)) > 0:
+                cr_rows.append({'account': r['purpose'], 'amount': float(r['total'])})
+    except Exception:
+        pass
+
+    # ── DR SIDE: Expenses (by major head, including Manikandan) ───
+    with _cursor() as c:
+        c.execute("""
+            SELECT mh.code, mh.name,
+                   COALESCE(SUM(et.amount),0) AS et_total,
+                   COALESCE(SUM(pf.amount),0) AS pf_total
+            FROM major_heads mh
+            LEFT JOIN expense_transactions et ON et.major_head_id=mh.id
+              AND et.txn_date >= %s AND et.txn_date <= %s
+            LEFT JOIN priest_float pf ON pf.major_head_id=mh.id
+              AND pf.txn_type='EXPENSE'
+              AND pf.txn_date >= %s AND pf.txn_date <= %s
+            WHERE mh.is_active
+            GROUP BY mh.id, mh.code, mh.name
+            ORDER BY mh.code
+        """, (date_from, date_to, date_from, date_to))
+        for r in _rows(c):
+            amt = float(r['et_total']) + float(r['pf_total'])
+            if amt > 0:
+                dr_rows.append({'account': f"{r['code']} {r['name']}", 'amount': amt})
+
+    # ── DR SIDE: Closing Asset Balances ───────────────────────────
+    # Savings Bank A/C
+    bank_mvts = _bank_movements(date_from, date_to)
+    bank_bal = float(ob['savings_balance'])
+    for m in bank_mvts:
+        bank_bal += float(m.get('credit', 0)) - float(m.get('debit', 0))
+    if bank_bal >= 0:
+        dr_rows.append({'account': 'Savings Bank A/C', 'amount': bank_bal})
+    else:
+        cr_rows.append({'account': 'Savings Bank A/C (Cr)', 'amount': abs(bank_bal)})
+
+    # Fixed Deposit A/C
+    fd_bal = float(ob['fixed_deposit_balance'])
+    dr_rows.append({'account': 'Fixed Deposit A/C', 'amount': fd_bal})
+
+    # Cash in Hand
+    cash_mvts = _cash_movements(date_from, date_to)
+    cash_bal = float(ob['cash_balance'])
+    for m in cash_mvts:
+        cash_bal += float(m.get('credit', 0)) - float(m.get('debit', 0))
+    if cash_bal >= 0:
+        dr_rows.append({'account': 'Cash in Hand', 'amount': cash_bal})
+    else:
+        cr_rows.append({'account': 'Cash in Hand (Cr)', 'amount': abs(cash_bal)})
+
+    # Manikandan A/C (net advance balance)
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT
+                  COALESCE(SUM(CASE WHEN txn_type='ADVANCE' THEN amount ELSE 0 END),0) adv,
+                  COALESCE(SUM(CASE WHEN txn_type='EXPENSE'  THEN amount ELSE 0 END),0) exp
+                FROM priest_float WHERE fy=%s
+            """, (fy_str,))
+            r = _row(c)
+            mani_bal = float(r['adv']) - float(r['exp']) if r else 0.0
+        if mani_bal > 0:
+            dr_rows.append({'account': 'Manikandan A/C (Outstanding Advance)', 'amount': mani_bal})
+        elif mani_bal < 0:
+            cr_rows.append({'account': 'Manikandan A/C (Cr)', 'amount': abs(mani_bal)})
+    except Exception:
+        pass
+
+    dr_total = sum(r['amount'] for r in dr_rows)
+    cr_total = sum(r['amount'] for r in cr_rows)
+    return dr_rows, cr_rows, dr_total, cr_total
+
 # ── Bank statement functions ───────────────────────────────────────────────────
+def _cash_movements(date_from, date_to):
+    """Cash account movements — Dr = cash in, Cr = cash out."""
+    rows = []
+    with _cursor() as c:
+        c.execute("""
+            SELECT txn_date AS dt,
+                   COALESCE(donor_name, income_type, 'Cash Receipt') AS narration,
+                   cash_amount AS credit, 0.00 AS debit,
+                   'INCOME' AS src
+            FROM income_transactions
+            WHERE cash_amount > 0 AND txn_date >= %s AND txn_date <= %s
+        """, (date_from, date_to))
+        rows += _rows(c)
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT issue_date::date AS dt,
+                       name || ' — ' || purpose AS narration,
+                       amount AS credit, 0.00 AS debit,
+                       'RECEIPT' AS src
+                FROM receipts
+                WHERE payment = 'cash'
+                  AND (status IS NULL OR status != 'CANCELLED')
+                  AND issue_date >= %s AND issue_date <= %s
+            """, (str(date_from), str(date_to)))
+            rows += _rows(c)
+    except Exception:
+        pass
+    with _cursor() as c:
+        c.execute("""
+            SELECT txn_date AS dt,
+                   COALESCE(description, paid_to, 'Cash Expense') AS narration,
+                   0.00 AS credit, amount AS debit,
+                   'EXPENSE' AS src
+            FROM expense_transactions
+            WHERE payment_mode = 'CASH' AND txn_date >= %s AND txn_date <= %s
+        """, (date_from, date_to))
+        rows += _rows(c)
+    # Cash advances to Manikandan
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT txn_date AS dt,
+                       'Advance to Manikandan'::text AS narration,
+                       0.00 AS credit, amount AS debit,
+                       'ADVANCE' AS src
+                FROM priest_float
+                WHERE txn_type = 'ADVANCE' AND payment_mode = 'CASH'
+                  AND txn_date >= %s AND txn_date <= %s
+            """, (date_from, date_to))
+            rows += _rows(c)
+    except Exception:
+        pass
+    rows.sort(key=lambda r: r["dt"])
+    return rows
+
+
 def _bank_opening(fy_str):
     """Return (row_or_None, err_str) for the given FY opening balance."""
     try:
@@ -775,8 +939,13 @@ def render_expense_entry(user: str):
         st.markdown("#### 📒 Account Ledger")
 
         acct_type = st.radio("Account Type",
-                             ["Expense Account (E-01, E-02 ...)","Income / Fund Account",
-                              "Receipts / Donations (Apr 2026+)"],
+                             ["Expense Account (E-01, E-02 ...)",
+                              "Income / Fund Account",
+                              "Receipts / Donations (Apr 2026+)",
+                              "Savings Bank A/C",
+                              "Cash A/C",
+                              "Fixed Deposit A/C",
+                              "Manikandan A/C"],
                              horizontal=True, key="al_type")
 
         # Date range
@@ -939,7 +1108,7 @@ def render_expense_entry(user: str):
                                        file_name=fname_csv, mime="text/csv")
 
         # ── RECEIPTS (Apr 2026+) ───────────────────────────────────────────────
-        else:
+        elif acct_type.startswith("Receipts"):
             st.caption("Data from Piranjeri-Receipts app — automatically synced (same database)")
             purpose_opts = ["ALL"] + [
                 "Nithya Pooja","Garuda Seva","Pradhosham","Sangabhishekam",
@@ -1018,134 +1187,332 @@ def render_expense_entry(user: str):
                     st.download_button("⬇️ Download CSV", data=csv_data,
                                        file_name=fname_csv, mime="text/csv")
 
+
+        # ── SAVINGS BANK A/C ───────────────────────────────────────────────────
+        elif acct_type == "Savings Bank A/C":
+            _today_al = date.today()
+            _fy_yr_al = _today_al.year if _today_al.month >= 4 else _today_al.year - 1
+            al_fy_opts = [f"{_fy_yr_al}-{str(_fy_yr_al+1)[2:]}", f"{_fy_yr_al-1}-{str(_fy_yr_al)[2:]}"]
+            al_fy = st.selectbox("Financial Year", al_fy_opts, key="al_bank_fy")
+            al_yr = int(al_fy[:4])
+            al_d_from = date(al_yr, 4, 1)
+            al_d_to   = min(date(al_yr+1, 3, 31), _today_al)
+            al1, al2 = st.columns(2)
+            with al1: al_from = st.date_input("From", value=al_d_from, key="al_bank_from")
+            with al2: al_to   = st.date_input("To",   value=al_d_to,   key="al_bank_to")
+            if st.button("📊 Show Bank Ledger", key="al_bank_load"):
+                ob_row, ob_err = _bank_opening(al_fy)
+                if ob_err or ob_row is None:
+                    st.warning(f"Opening balance not found for FY {al_fy}. Run bank_setup.sql first.")
+                else:
+                    ob_sav = float(ob_row['savings_balance'])
+                    mvts   = _bank_movements(al_from, al_to)
+                    bal    = ob_sav
+                    rows_html = (f"<tr style='font-weight:600;background:#f0fdf4'>"
+                                 f"<td style='padding:5px 8px'>{ob_row['as_at'].strftime('%d %b %Y') if ob_row.get('as_at') else '—'}</td>"
+                                 f"<td style='padding:5px 8px'>Opening Balance</td>"
+                                 f"<td style='text-align:right;padding:5px 8px;color:#166534'>&#8377;{ob_sav:,.2f}</td>"
+                                 f"<td></td>"
+                                 f"<td style='text-align:right;font-weight:700;padding:5px 8px'>&#8377;{bal:,.2f}</td>"
+                                 f"</tr>")
+                    total_dr = total_cr = 0.0
+                    for m in mvts:
+                        cr = float(m.get('credit', 0)); dr = float(m.get('debit', 0))
+                        bal += cr - dr
+                        total_dr += dr; total_cr += cr
+                        dt = m['dt'].strftime('%d %b %Y') if hasattr(m['dt'], 'strftime') else str(m['dt'])
+                        cr_cell = f"<td style='text-align:right;padding:5px 8px;color:#166534'>&#8377;{cr:,.2f}</td>" if cr else "<td></td>"
+                        dr_cell = f"<td style='text-align:right;padding:5px 8px;color:#991b1b'>&#8377;{dr:,.2f}</td>" if dr else "<td></td>"
+                        rows_html += (f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                                      f"<td style='padding:5px 8px'>{dt}</td>"
+                                      f"<td style='padding:5px 8px'>{str(m.get('narration',''))[:55]}</td>"
+                                      f"{cr_cell}{dr_cell}"
+                                      f"<td style='text-align:right;font-weight:600;padding:5px 8px'>&#8377;{bal:,.2f}</td>"
+                                      f"</tr>")
+                    foot = (f"<tfoot><tr style='font-weight:700;background:#dcfce7'>"
+                            f"<td colspan='2' style='padding:6px 8px'>TOTALS / CLOSING BALANCE</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#166534'>&#8377;{total_cr:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#991b1b'>&#8377;{total_dr:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px'>&#8377;{bal:,.2f}</td>"
+                            f"</tr></tfoot>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                    <thead><tr style="background:#1e3a5f;color:white">
+                      <th style="padding:6px 8px">Date</th>
+                      <th style="padding:6px 8px">Particulars</th>
+                      <th style="text-align:right;padding:6px 8px">Dr (Receipts)</th>
+                      <th style="text-align:right;padding:6px 8px">Cr (Payments)</th>
+                      <th style="text-align:right;padding:6px 8px">Balance</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>{foot}
+                    </table>""", unsafe_allow_html=True)
+                    st.caption(f"{len(mvts)} transactions  ·  Closing balance ₹{bal:,.2f}")
+
+        # ── CASH A/C ───────────────────────────────────────────────────────────
+        elif acct_type == "Cash A/C":
+            _today_al2 = date.today()
+            _fy_yr_al2 = _today_al2.year if _today_al2.month >= 4 else _today_al2.year - 1
+            al_fy2_opts = [f"{_fy_yr_al2}-{str(_fy_yr_al2+1)[2:]}", f"{_fy_yr_al2-1}-{str(_fy_yr_al2)[2:]}"]
+            al_fy2 = st.selectbox("Financial Year", al_fy2_opts, key="al_cash_fy")
+            al_yr2 = int(al_fy2[:4])
+            al_d_from2 = date(al_yr2, 4, 1)
+            al_d_to2   = min(date(al_yr2+1, 3, 31), _today_al2)
+            ca1, ca2 = st.columns(2)
+            with ca1: al_from2 = st.date_input("From", value=al_d_from2, key="al_cash_from")
+            with ca2: al_to2   = st.date_input("To",   value=al_d_to2,   key="al_cash_to")
+            if st.button("📊 Show Cash Ledger", key="al_cash_load"):
+                ob_row2, ob_err2 = _bank_opening(al_fy2)
+                if ob_err2 or ob_row2 is None:
+                    st.warning(f"Opening balance not found for FY {al_fy2}. Run bank_setup.sql first.")
+                else:
+                    ob_cash = float(ob_row2['cash_balance'])
+                    cash_mvts = _cash_movements(al_from2, al_to2)
+                    bal2 = ob_cash
+                    rows_html = (f"<tr style='font-weight:600;background:#f0fdf4'>"
+                                 f"<td style='padding:5px 8px'>01 Apr {al_yr2}</td>"
+                                 f"<td style='padding:5px 8px'>Opening Cash Balance</td>"
+                                 f"<td style='text-align:right;padding:5px 8px;color:#166534'>&#8377;{ob_cash:,.2f}</td>"
+                                 f"<td></td>"
+                                 f"<td style='text-align:right;font-weight:700;padding:5px 8px'>&#8377;{bal2:,.2f}</td>"
+                                 f"</tr>")
+                    tot_dr2 = tot_cr2 = 0.0
+                    for m in cash_mvts:
+                        cr = float(m.get('credit', 0)); dr = float(m.get('debit', 0))
+                        bal2 += cr - dr; tot_dr2 += dr; tot_cr2 += cr
+                        dt = m['dt'].strftime('%d %b %Y') if hasattr(m['dt'], 'strftime') else str(m['dt'])
+                        cr_cell = f"<td style='text-align:right;padding:5px 8px;color:#166534'>&#8377;{cr:,.2f}</td>" if cr else "<td></td>"
+                        dr_cell = f"<td style='text-align:right;padding:5px 8px;color:#991b1b'>&#8377;{dr:,.2f}</td>" if dr else "<td></td>"
+                        rows_html += (f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                                      f"<td style='padding:5px 8px'>{dt}</td>"
+                                      f"<td style='padding:5px 8px'>{str(m.get('narration',''))[:55]}</td>"
+                                      f"{cr_cell}{dr_cell}"
+                                      f"<td style='text-align:right;font-weight:600;padding:5px 8px'>&#8377;{bal2:,.2f}</td>"
+                                      f"</tr>")
+                    foot = (f"<tfoot><tr style='font-weight:700;background:#dcfce7'>"
+                            f"<td colspan='2' style='padding:6px 8px'>TOTALS / CLOSING</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#166534'>&#8377;{tot_cr2:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#991b1b'>&#8377;{tot_dr2:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px'>&#8377;{bal2:,.2f}</td>"
+                            f"</tr></tfoot>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                    <thead><tr style="background:#78350f;color:white">
+                      <th style="padding:6px 8px">Date</th>
+                      <th style="padding:6px 8px">Particulars</th>
+                      <th style="text-align:right;padding:6px 8px">Dr (Receipts)</th>
+                      <th style="text-align:right;padding:6px 8px">Cr (Payments)</th>
+                      <th style="text-align:right;padding:6px 8px">Balance</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>{foot}
+                    </table>""", unsafe_allow_html=True)
+                    st.caption(f"{len(cash_mvts)} transactions  ·  Closing cash ₹{bal2:,.2f}")
+
+        # ── FIXED DEPOSIT A/C ──────────────────────────────────────────────────
+        elif acct_type == "Fixed Deposit A/C":
+            _today_al3 = date.today()
+            _fy_yr_al3 = _today_al3.year if _today_al3.month >= 4 else _today_al3.year - 1
+            al_fy3_opts = [f"{_fy_yr_al3}-{str(_fy_yr_al3+1)[2:]}", f"{_fy_yr_al3-1}-{str(_fy_yr_al3)[2:]}"]
+            al_fy3 = st.selectbox("Financial Year", al_fy3_opts, key="al_fd_fy")
+            ob_row3, ob_err3 = _bank_opening(al_fy3)
+            if ob_err3:
+                st.error(f"DB error: {ob_err3}")
+            elif ob_row3 is None:
+                st.warning(f"Opening balance not found for FY {al_fy3}.")
+            else:
+                fd_bal = float(ob_row3['fixed_deposit_balance'])
+                st.markdown(f"""
+                <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:1rem 1.5rem;margin:.5rem 0">
+                  <div style="font-size:.75rem;color:#64748b">FIXED DEPOSIT — Opening Balance (01 Apr {al_fy3[:4]})</div>
+                  <div style="font-weight:700;font-size:1.4rem;color:#1e40af">&#8377;{fd_bal:,.2f}</div>
+                  <div style="font-size:.75rem;color:#64748b;margin-top:.5rem">
+                    FD interest is credited to Savings Bank A/C — not compounded into FD principal.<br>
+                    Any renewal or new FD deposit should be recorded and opening balance updated via bank_setup.sql.
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+        # ── MANIKANDAN A/C ─────────────────────────────────────────────────────
+        elif acct_type == "Manikandan A/C":
+            _today_al4 = date.today()
+            _fy_yr_al4 = _today_al4.year if _today_al4.month >= 4 else _today_al4.year - 1
+            al_fy4_opts = [f"{_fy_yr_al4}-{str(_fy_yr_al4+1)[2:]}", f"{_fy_yr_al4-1}-{str(_fy_yr_al4)[2:]}"]
+            al_fy4 = st.selectbox("Financial Year", al_fy4_opts, key="al_mani_fy")
+            if st.button("📊 Show Manikandan Ledger", key="al_mani_load"):
+                entries = _priest_ledger(al_fy4)
+                if not entries:
+                    st.info("No entries for this FY.")
+                else:
+                    bal4 = 0.0; tot_adv = tot_exp4 = 0.0; rows_html = ""
+                    for e in entries:
+                        amt = float(e['amount'])
+                        if e['txn_type'] == 'ADVANCE':
+                            bal4 += amt; tot_adv += amt
+                            dr_cell = f"<td style='text-align:right;padding:5px 8px;color:#166534'>&#8377;{amt:,.2f}</td>"
+                            cr_cell = "<td></td>"
+                        else:
+                            bal4 -= amt; tot_exp4 += amt
+                            dr_cell = "<td></td>"
+                            cr_cell = f"<td style='text-align:right;padding:5px 8px;color:#991b1b'>&#8377;{amt:,.2f}</td>"
+                        dt4 = e['txn_date'].strftime('%d %b %Y') if hasattr(e['txn_date'], 'strftime') else str(e['txn_date'])
+                        mh4 = e.get('mh_code') or ''
+                        rows_html += (f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                                      f"<td style='padding:5px 8px'>{dt4}</td>"
+                                      f"<td style='padding:5px 8px'>{e.get('txn_type','')}</td>"
+                                      f"<td style='padding:5px 8px'>{mh4}</td>"
+                                      f"<td style='padding:5px 8px'>{str(e.get('description',''))[:40]}</td>"
+                                      f"{dr_cell}{cr_cell}"
+                                      f"<td style='text-align:right;font-weight:600;padding:5px 8px'>&#8377;{bal4:,.2f}</td>"
+                                      f"</tr>")
+                    status = "Dr" if bal4 >= 0 else "Cr"
+                    foot = (f"<tfoot><tr style='font-weight:700;background:#fef9c3'>"
+                            f"<td colspan='4' style='padding:6px 8px'>TOTALS / BALANCE ({status})</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#166534'>&#8377;{tot_adv:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px;color:#991b1b'>&#8377;{tot_exp4:,.2f}</td>"
+                            f"<td style='text-align:right;padding:6px 8px'>&#8377;{abs(bal4):,.2f} {status}</td>"
+                            f"</tr></tfoot>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+                    <thead><tr style="background:#713f12;color:white">
+                      <th style="padding:6px 8px">Date</th>
+                      <th style="padding:6px 8px">Type</th>
+                      <th style="padding:6px 8px">Head</th>
+                      <th style="padding:6px 8px">Particulars</th>
+                      <th style="text-align:right;padding:6px 8px">Dr (Advance)</th>
+                      <th style="text-align:right;padding:6px 8px">Cr (Expense)</th>
+                      <th style="text-align:right;padding:6px 8px">Balance</th>
+                    </tr></thead>
+                    <tbody>{rows_html}</tbody>{foot}
+                    </table>""", unsafe_allow_html=True)
+                    net_label = "outstanding advance" if bal4 >= 0 else "excess settlement"
+                    st.caption(f"Total advances ₹{tot_adv:,.2f}  ·  Total expenses ₹{tot_exp4:,.2f}  ·  Balance ₹{abs(bal4):,.2f} ({net_label})")
+
     # ═══════════════════════════════════════════════════════════
-    # TAB 5 — Trial Balance
+    # TAB 5 — Trial Balance (Double-Entry)
     # ═══════════════════════════════════════════════════════════
     with tabs[4]:
         st.markdown("#### ⚖️ Trial Balance")
 
         today = date.today()
-        fy_start_year = today.year if today.month >= 4 else today.year - 1
-        tb1, tb2 = st.columns(2)
-        with tb1: tb_from = st.date_input("From", value=date(fy_start_year, 4, 1), key="tb_from")
-        with tb2: tb_to   = st.date_input("To",   value=today, key="tb_to")
+        _fy_yr5  = today.year if today.month >= 4 else today.year - 1
+        cur_fy5  = f"{_fy_yr5}-{str(_fy_yr5+1)[2:]}"
+        prev_fy5 = f"{_fy_yr5-1}-{str(_fy_yr5)[2:]}"
+        tb_c1, tb_c2, tb_c3 = st.columns([1, 1, 1])
+        with tb_c1:
+            tb_fy = st.selectbox("Financial Year", [cur_fy5, prev_fy5], key="tb_fy")
+        fy_yr5_sel = int(tb_fy.split("-")[0])
+        with tb_c2:
+            tb_from = st.date_input("From", value=date(fy_yr5_sel, 4, 1),  key="tb_from")
+        with tb_c3:
+            tb_to   = st.date_input("To",   value=today,                    key="tb_to")
 
         if st.button("📊 Generate Trial Balance", type="primary", key="tb_load"):
-            exp_rows, inc_rows = _trial_balance(tb_from, tb_to)
+            ob5, ob5_err = _bank_opening(tb_fy)
+            if ob5_err:
+                st.error(f"Database error: {ob5_err}")
+            elif ob5 is None:
+                st.warning(
+                    f"⚠️ No opening balance found for FY {tb_fy}. "
+                    f"Run `bank_setup.sql` (FY 2025-26) or `bank_setup_2026_27.sql` "
+                    f"(FY 2026-27) in Neon SQL Editor first."
+                )
+            else:
+                dr_rows, cr_rows, dr_total, cr_total = _full_tb(tb_from, tb_to, ob5)
 
-            col1, col2 = st.columns(2)
+                # ── Build HTML rows ──────────────────────────────────────────
+                def _tb_rows_html(rows, bg_alt):
+                    html = ""
+                    for i, r in enumerate(rows):
+                        bg = bg_alt if i % 2 == 1 else "transparent"
+                        html += (f"<tr style='background:{bg}'>"
+                                 f"<td style='padding:5px 10px;font-size:.82rem'>{r['account']}</td>"
+                                 f"<td style='text-align:right;padding:5px 10px;font-size:.82rem'"
+                                 f"    >&nbsp;₹{r['amount']:,.2f}</td>"
+                                 f"</tr>")
+                    return html
 
-            with col1:
-                st.markdown("**Expenses — Debit Side**")
-                total_exp = 0.0
-                rows_html = ""
-                for r in exp_rows:
-                    amt = float(r["total"])
-                    if amt > 0:
-                        total_exp += amt
-                        rows_html += (f"<tr style='border-bottom:1px solid #fecaca'>"
-                                      f"<td style='padding:5px 8px'>{r['code']} {r['name']}</td>"
-                                      f"<td style='text-align:right;padding:5px 8px'>₹{amt:,.2f}</td>"
-                                      f"</tr>")
-                if rows_html:
+                dr_html = _tb_rows_html(dr_rows, "#fef9ee")
+                cr_html = _tb_rows_html(cr_rows, "#f0fdf4")
+
+                diff = dr_total - cr_total
+
+                # Pad the shorter side with a blank row so tables look balanced
+                # (purely visual — totals are correct)
+                if len(dr_rows) < len(cr_rows):
+                    for _ in range(len(cr_rows) - len(dr_rows)):
+                        dr_html += "<tr><td>&nbsp;</td><td></td></tr>"
+                elif len(cr_rows) < len(dr_rows):
+                    for _ in range(len(dr_rows) - len(cr_rows)):
+                        cr_html += "<tr><td>&nbsp;</td><td></td></tr>"
+
+                # If difference exists add a balancing row
+                if abs(diff) > 0.005:
+                    if diff > 0:   # Dr > Cr → add suspense to Cr side
+                        cr_html += (f"<tr style='background:#fef3c7'>"
+                                    f"<td style='padding:5px 10px;font-size:.82rem;color:#92400e'>"
+                                    f"⚠ Unreconciled / Rounding</td>"
+                                    f"<td style='text-align:right;padding:5px 10px;font-size:.82rem;"
+                                    f"color:#92400e'>&nbsp;₹{diff:,.2f}</td></tr>")
+                        cr_total += diff
+                    else:
+                        dr_html += (f"<tr style='background:#fef3c7'>"
+                                    f"<td style='padding:5px 10px;font-size:.82rem;color:#92400e'>"
+                                    f"⚠ Unreconciled / Rounding</td>"
+                                    f"<td style='text-align:right;padding:5px 10px;font-size:.82rem;"
+                                    f"color:#92400e'>&nbsp;₹{abs(diff):,.2f}</td></tr>")
+                        dr_total += abs(diff)
+
+                col_dr, col_cr = st.columns(2)
+
+                with col_dr:
                     st.markdown(f"""
-                    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
-                    <thead><tr style="background:#991b1b;color:white">
-                      <th style="padding:6px 8px">Account</th>
-                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                    </tr></thead>
-                    <tbody>{rows_html}</tbody>
-                    <tfoot><tr style="font-weight:700;background:#fee2e2">
-                      <td style="padding:6px 8px">TOTAL EXPENSES</td>
-                      <td style="text-align:right;padding:6px 8px">₹{total_exp:,.2f}</td>
-                    </tr></tfoot>
+                    <table style="width:100%;border-collapse:collapse">
+                    <thead>
+                      <tr style="background:#7c3aed;color:white">
+                        <th style="padding:8px 10px;font-size:.82rem;text-align:left">Dr — Account</th>
+                        <th style="padding:8px 10px;font-size:.82rem;text-align:right">Amount ₹</th>
+                      </tr>
+                    </thead>
+                    <tbody>{dr_html}</tbody>
+                    <tfoot>
+                      <tr style="background:#ede9fe;font-weight:700">
+                        <td style="padding:8px 10px;font-size:.85rem">TOTAL (Dr)</td>
+                        <td style="text-align:right;padding:8px 10px;font-size:.85rem">₹{dr_total:,.2f}</td>
+                      </tr>
+                    </tfoot>
                     </table>
                     """, unsafe_allow_html=True)
-                else:
-                    st.info("No expenses.")
 
-            with col2:
-                st.markdown("**Income — Credit Side**")
-                total_inc = 0.0
-                rows_html = ""
-                for r in inc_rows:
-                    amt = float(r["total"])
-                    if amt > 0:
-                        total_inc += amt
-                        rows_html += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
-                                      f"<td style='padding:5px 8px'>{r['code']} {r['name']}</td>"
-                                      f"<td style='text-align:right;padding:5px 8px'>₹{amt:,.2f}</td>"
-                                      f"</tr>")
-
-                # Also fetch receipts for this period
-                rec_summary = _receipts_summary(tb_from, tb_to)
-                total_rec = sum(float(r["total"]) for r in rec_summary) if rec_summary else 0.0
-                total_inc_all = total_inc  # will be updated below
-
-                if rows_html or rec_summary:
-                    # Fund-based income (income_transactions)
-                    if rows_html:
-                        st.markdown(f"""
-                        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
-                        <thead><tr style="background:#166534;color:white">
-                          <th style="padding:6px 8px">Fund (Historical)</th>
-                          <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                        </tr></thead>
-                        <tbody>{rows_html}</tbody>
-                        <tfoot><tr style="font-weight:700;background:#dcfce7">
-                          <td style="padding:6px 8px">Sub-total</td>
-                          <td style="text-align:right;padding:6px 8px">₹{total_inc:,.2f}</td>
-                        </tr></tfoot>
-                        </table>
-                        """, unsafe_allow_html=True)
-                    # Receipts (receipts table)
-                    if rec_summary:
-                        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
-                        rec_rows = ""
-                        for r in rec_summary:
-                            rec_rows += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
-                                         f"<td style='padding:5px 8px'>{r['purpose']}"
-                                         f" <span style='color:#64748b;font-size:.75rem'>({int(r['cnt'])} receipts)</span></td>"
-                                         f"<td style='text-align:right;padding:5px 8px'>₹{float(r['total']):,.2f}</td>"
-                                         f"</tr>")
-                        st.markdown(f"""
-                        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
-                        <thead><tr style="background:#0d9488;color:white">
-                          <th style="padding:6px 8px">Receipts / Donations</th>
-                          <th style="text-align:right;padding:6px 8px">Amount ₹</th>
-                        </tr></thead>
-                        <tbody>{rec_rows}</tbody>
-                        <tfoot><tr style="font-weight:700;background:#ccfbf1">
-                          <td style="padding:6px 8px">Sub-total</td>
-                          <td style="text-align:right;padding:6px 8px">₹{total_rec:,.2f}</td>
-                        </tr></tfoot>
-                        </table>
-                        """, unsafe_allow_html=True)
-                    total_inc_all = total_inc + total_rec
+                with col_cr:
                     st.markdown(f"""
-                    <div style="background:#dcfce7;border-radius:6px;padding:.5rem .8rem;
-                                font-weight:700;margin-top:.4rem">
-                      TOTAL INCOME &nbsp;·&nbsp; ₹{total_inc_all:,.2f}
-                    </div>""", unsafe_allow_html=True)
-                else:
-                    st.info("No income.")
-                    total_inc_all = 0.0
+                    <table style="width:100%;border-collapse:collapse">
+                    <thead>
+                      <tr style="background:#0369a1;color:white">
+                        <th style="padding:8px 10px;font-size:.82rem;text-align:left">Cr — Account</th>
+                        <th style="padding:8px 10px;font-size:.82rem;text-align:right">Amount ₹</th>
+                      </tr>
+                    </thead>
+                    <tbody>{cr_html}</tbody>
+                    <tfoot>
+                      <tr style="background:#e0f2fe;font-weight:700">
+                        <td style="padding:8px 10px;font-size:.85rem">TOTAL (Cr)</td>
+                        <td style="text-align:right;padding:8px 10px;font-size:.85rem">₹{cr_total:,.2f}</td>
+                      </tr>
+                    </tfoot>
+                    </table>
+                    """, unsafe_allow_html=True)
 
-            net = (total_inc + total_rec) - total_exp
-            total_inc = total_inc + total_rec  # for summary card below
-            net_color = "#166534" if net >= 0 else "#991b1b"
-            net_label = "SURPLUS" if net >= 0 else "DEFICIT"
-            st.markdown(f"""
-            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
-                        padding:.8rem 1.4rem;margin-top:1rem;display:flex;gap:3rem;flex-wrap:wrap">
-              <div><div style="font-size:.7rem;color:#64748b">TOTAL INCOME</div>
-                   <div style="font-weight:700;font-size:1.1rem;color:#166534">₹{total_inc:,.2f}</div></div>
-              <div><div style="font-size:.7rem;color:#64748b">TOTAL EXPENSES</div>
-                   <div style="font-weight:700;font-size:1.1rem;color:#991b1b">₹{total_exp:,.2f}</div></div>
-              <div><div style="font-size:.7rem;color:#64748b">NET {net_label}</div>
-                   <div style="font-weight:700;font-size:1.2rem;color:{net_color}">₹{abs(net):,.2f}</div></div>
-            </div>
-            """, unsafe_allow_html=True)
+                # Summary status
+                balanced = abs(dr_total - cr_total) < 0.01
+                status_bg   = "#f0fdf4" if balanced else "#fef3c7"
+                status_bdr  = "#86efac" if balanced else "#fcd34d"
+                status_icon = "✅" if balanced else "⚠️"
+                status_msg  = "Trial Balance tallies — Dr = Cr" if balanced else f"Difference: ₹{abs(dr_total-cr_total):,.2f}"
+                st.markdown(f"""
+                <div style="background:{status_bg};border:1px solid {status_bdr};border-radius:8px;
+                            padding:.7rem 1.2rem;margin-top:1rem;font-weight:600;font-size:.9rem">
+                  {status_icon} {status_msg} &nbsp;|&nbsp;
+                  Dr Total: ₹{dr_total:,.2f} &nbsp;|&nbsp; Cr Total: ₹{cr_total:,.2f}
+                </div>
+                """, unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════════
     # TAB 6 — Bank Statement
