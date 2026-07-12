@@ -1,16 +1,12 @@
 # expense_entry.py — Piranjeri Temples Trust Accounting v2
 # Tabs: New Expense | Manikandan A/C | Import Excel | Standing Amounts | Recent Entries
-
 import streamlit as st
 import pg8000.dbapi as _pg
 from urllib.parse import urlparse, unquote
 from datetime import date
 from contextlib import contextmanager
 import os
-
-
 # ── DB ─────────────────────────────────────────────────────────────────────────
-
 def _connect():
     dsn = os.environ.get("NEON_DSN") or st.secrets["neon"]["dsn"]
     u = urlparse(dsn)
@@ -22,7 +18,6 @@ def _connect():
         port=u.port or 5432,
         ssl_context=True,
     )
-
 @contextmanager
 def _cursor():
     conn = _connect()
@@ -36,45 +31,36 @@ def _cursor():
     finally:
         cur.close()
         conn.close()
-
 def _rows(cur):
     """Return all rows as list of dicts."""
     if not cur.description:
         return []
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
-
 def _row(cur):
     """Return one row as dict (or None)."""
     if not cur.description:
         return None
     row = cur.fetchone()
     return None if row is None else dict(zip([d[0] for d in cur.description], row))
-
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
 def _fy(d: date) -> str:
     return f"{d.year}-{str(d.year+1)[2:]}" if d.month >= 4 else f"{d.year-1}-{str(d.year)[2:]}"
-
 @st.cache_data(ttl=300)
 def _fund_sources():
     with _cursor() as c:
         c.execute("SELECT id,code,name FROM fund_sources WHERE is_active ORDER BY name")
         return _rows(c)
-
 @st.cache_data(ttl=300)
 def _festivals():
     with _cursor() as c:
         c.execute("SELECT id,code,name,fund_source_id FROM festivals WHERE is_active ORDER BY name")
         return _rows(c)
-
 @st.cache_data(ttl=300)
 def _major_heads():
     with _cursor() as c:
         c.execute("SELECT id,code,name FROM major_heads WHERE is_active ORDER BY code")
         return _rows(c)
-
 @st.cache_data(ttl=300)
 def _standing():
     with _cursor() as c:
@@ -87,7 +73,6 @@ def _standing():
             WHERE sa.is_active ORDER BY mh.code,sa.description
         """)
         return _rows(c)
-
 def _recent(limit=20):
     with _cursor() as c:
         c.execute("""
@@ -100,7 +85,6 @@ def _recent(limit=20):
             ORDER BY et.created_at DESC LIMIT %s
         """, (limit,))
         return _rows(c)
-
 def _save_expense(rec):
     with _cursor() as c:
         c.execute("""
@@ -112,9 +96,7 @@ def _save_expense(rec):
               rec["major_head_id"],rec["amount"],rec["payment_mode"],rec["cheque_no"],
               rec["utr_ref_no"],rec["description"],rec["paid_to"],rec["entered_by"]))
         return _row(c)["id"]
-
 # ── Priest float helpers ───────────────────────────────────────────────────────
-
 def _priest_balance(fy_str):
     with _cursor() as c:
         c.execute("""
@@ -125,7 +107,6 @@ def _priest_balance(fy_str):
         """, (fy_str,))
         r = _row(c)
         return float(r["advances"]), float(r["expenses"])
-
 def _priest_ledger(fy_str, limit=30):
     with _cursor() as c:
         c.execute("""
@@ -139,7 +120,6 @@ def _priest_ledger(fy_str, limit=30):
             WHERE pf.fy=%s ORDER BY pf.txn_date DESC,pf.id DESC LIMIT %s
         """, (fy_str, limit))
         return _rows(c)
-
 def _save_priest(rec):
     with _cursor() as c:
         c.execute("""
@@ -152,9 +132,7 @@ def _save_priest(rec):
               rec["description"],rec["payment_mode"],rec["cheque_no"],
               rec["utr_ref_no"],rec["entered_by"]))
         return _row(c)["id"]
-
 # ── Excel import helpers ───────────────────────────────────────────────────────
-
 # Fund column → (fund_source_code, major_head_code or None, festival_code or None)
 FUND_COL_MAP = {
     "NPK":        ("NPK",    None,   "NPK_DAILY"),
@@ -167,10 +145,9 @@ FUND_COL_MAP = {
     "BK_CHGS":    ("NPK",  "E-15",  None),
     "AUDIT":      ("NPK",  "E-16",  None),
 }
-
 KEYWORD_HEAD = [
     (["flower","garland","malli","kayathar","nadarajan"],               "E-01"),
-    (["abhishekam material","subramaniapill","coconut","lemon","betel",
+    (["abhishekam material","abishekam","subramaniapill","coconut","lemon","betel",
       "panchamirtham","vessel","pooja item"],                           "E-02"),
     (["milk"],                                                          "E-03"),
     (["kolam"],                                                         "E-04"),
@@ -193,14 +170,12 @@ KEYWORD_HEAD = [
     (["furniture","chair","equipment"],                                 "E-17"),
     (["renovation","cctv repair","cc tv"],                              "E-13"),
 ]
-
 def _guess_head(text: str) -> str | None:
     t = text.lower()
     for keywords, code in KEYWORD_HEAD:
         if any(k in t for k in keywords):
             return code
     return None
-
 def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> tuple:
     """
     Returns (rows: list[dict], skipped: list[str], advances: list[dict])
@@ -209,7 +184,6 @@ def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> t
     advances = Manikandan advance rows
     """
     import pandas as pd
-
     df = pd.read_excel(file, sheet_name="EXP", header=8, engine="openpyxl")
     # Trim to expected columns
     col_names = ["day","month","year","particulars","chq_no","dr","cr","balance",
@@ -217,43 +191,34 @@ def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> t
                  "RENOVAT","BK_CHGS","AUDIT","ADVANCES"]
     df = df.iloc[:, :len(col_names)]
     df.columns = col_names[:df.shape[1]]
-
     rows, skipped, advances = [], [], []
     last_day = last_month = last_year = None
-
     for _, row in df.iterrows():
         import math
-
         def val(col):
             v = row.get(col)
             if v is None or (isinstance(v, float) and math.isnan(v)):
                 return None
             return v
-
         day = val("day"); month = val("month"); year = val("year")
         if day is not None: last_day = int(day)
         if month is not None: last_month = int(month)
         if year is not None: last_year = int(year)
-
         if last_day is None or last_month is None or last_year is None:
             continue
-
         particulars = str(val("particulars") or "").strip()
         if not particulars or particulars.upper() in ["DATE","CASH BALANCE B/FD",""]:
             continue
-
         try:
             txn_date = date(last_year, last_month, last_day)
         except ValueError:
             skipped.append(f"{particulars} — invalid date {last_day}/{last_month}/{last_year}")
             continue
-
         fy_str = _fy(txn_date)
         dr = val("dr")
         cr = val("cr")
         chq_no = val("chq_no")
         is_bank = val("bank") not in (None,)
-
         # ── CR rows = money received (Manikandan advance or donor receipt) ──
         if cr and not dr:
             if any(k in particulars.lower() for k in ["manikandan","priest","advance"]):
@@ -269,41 +234,32 @@ def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> t
                 })
             # else: donor receipts / bank interest — skip
             continue
-
         if not dr:
             continue  # no expense amount
-
         dr_amt = float(dr)
-
         # Skip ADVANCES FROM TRUSTEE column entries (liability, not expense)
         if val("ADVANCES") and not any([val(c) for c in
             ["NPK","PRO","PANGUNI","AADI_POORAM","GSS","VARU","RENOVAT","BK_CHGS","AUDIT"]]):
             skipped.append(f"{txn_date} · {particulars} · ₹{dr_amt:,.0f} — Trustee advance (skip)")
             continue
-
         # ── Determine fund source from column ──
         fund_col = None
         for col in ["NPK","PRO","PANGUNI","AADI_POORAM","GSS","VARU","RENOVAT","BK_CHGS","AUDIT"]:
             if val(col):
                 fund_col = col
                 break
-
         if not fund_col:
             skipped.append(f"{txn_date} · {particulars} · ₹{dr_amt:,.0f} — no fund column")
             continue
-
         fs_code, mh_code_hint, fest_code = FUND_COL_MAP.get(fund_col, (None, None, None))
         fs_id = fs_lookup.get(fs_code)
         fest_id = fest_lookup.get(fest_code)
-
         # ── Determine major head ──
         if mh_code_hint:
             mh_code = mh_code_hint
         else:
             mh_code = _guess_head(particulars)
-
         mh_id = mh_lookup.get(mh_code) if mh_code else None
-
         # ── Payment mode ──
         if chq_no:
             mode = "CHEQUE"
@@ -311,7 +267,6 @@ def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> t
             mode = "BANK_TRANSFER"
         else:
             mode = "CASH"
-
         rows.append({
             "txn_date": txn_date, "fy": fy_str,
             "fund_source_id": fs_id, "festival_id": fest_id,
@@ -327,9 +282,7 @@ def _parse_excel(file, fs_lookup: dict, mh_lookup: dict, fest_lookup: dict) -> t
             "_fest_code": fest_code,
             "_needs_review": (mh_id is None or fs_id is None),
         })
-
     return rows, skipped, advances
-
 def _bulk_insert_expenses(rows: list, user: str) -> int:
     count = 0
     with _cursor() as c:
@@ -346,9 +299,7 @@ def _bulk_insert_expenses(rows: list, user: str) -> int:
                   r["cheque_no"],r["utr_ref_no"],r["description"],r["paid_to"],user))
             count += 1
     return count
-
 # ── Receipts (income) import helpers ──────────────────────────────────────────
-
 # RECEIPTS sheet fund column → (fund_source_code, festival_code, income_type)
 RECEIPT_FUND_COLS = [
     ("NPK",    "NPK_DAILY",    "DONATION"),   # col index 9
@@ -361,11 +312,9 @@ RECEIPT_FUND_COLS = [
     ("NPK",    None,           "INTEREST"),   # 16  (BANK INT)
     (None,     None,           "OTHER"),      # 17  (OTHERS)
 ]
-
 def _parse_receipts_excel(file, fs_by_code: dict, fest_by_code: dict) -> tuple:
     """Returns (rows, skipped) for the RECEIPTS sheet."""
     import pandas as pd, math
-
     df = pd.read_excel(file, sheet_name="RECEIPTS", header=10, engine="openpyxl")
     col_names = ["book_no","rec_no","day","month","year","name",
                  "amount","bank","cash",
@@ -373,45 +322,34 @@ def _parse_receipts_excel(file, fs_by_code: dict, fest_by_code: dict) -> tuple:
                  "BANK_INT","OTHERS"]
     df = df.iloc[:, :len(col_names)]
     df.columns = col_names[:df.shape[1]]
-
     FUND_COLS = ["NPK","PRADO","AADI_PURAM","GSS","VARU","PANGU","RENO","BANK_INT","OTHERS"]
-
     rows, skipped = [], []
     last_book = None
-
     for _, row in df.iterrows():
         def val(col):
             v = row.get(col)
             return None if (v is None or (isinstance(v, float) and math.isnan(v))) else v
-
         if val("book_no"): last_book = int(val("book_no"))
-
         name = str(val("name") or "").strip()
         if not name or name.upper() in ("NAME","CANCELLED",""):
             continue
-
         rec_no = val("rec_no")
         day = val("day"); month = val("month"); year = val("year")
         if not all([day, month, year]):
             skipped.append(f"Rec#{rec_no} · {name} — missing date")
             continue
-
         try:
             txn_date = date(int(year), int(month), int(day))
         except ValueError:
             skipped.append(f"Rec#{rec_no} · {name} — bad date {day}/{month}/{year}")
             continue
-
         fy_str  = _fy(txn_date)
         total   = float(val("amount") or 0)
         bank_a  = float(val("bank")   or 0)
         cash_a  = float(val("cash")   or 0)
-
         if total <= 0:
             continue
-
         mode = "BOTH" if bank_a > 0 and cash_a > 0 else ("BANK" if bank_a > 0 else "CASH")
-
         any_fund = False
         for i, col in enumerate(FUND_COLS):
             col_amt = float(val(col) or 0)
@@ -437,13 +375,9 @@ def _parse_receipts_excel(file, fs_by_code: dict, fest_by_code: dict) -> tuple:
                 "_fund_code":     fs_code or "—",
                 "_fest_code":     fest_code or "—",
             })
-
         if not any_fund:
             skipped.append(f"Rec#{rec_no} · {name} · ₹{total:,.0f} — no fund column")
-
     return rows, skipped
-
-
 def _bulk_insert_income(rows: list, user: str) -> int:
     count = 0
     with _cursor() as c:
@@ -459,8 +393,6 @@ def _bulk_insert_income(rows: list, user: str) -> int:
                   r["fund_source_id"],r["festival_id"],r["income_type"],user))
             count += 1
     return count
-
-
 def _bulk_insert_advances(advances: list, user: str) -> int:
     count = 0
     with _cursor() as c:
@@ -475,10 +407,8 @@ def _bulk_insert_advances(advances: list, user: str) -> int:
                   a["description"],a["payment_mode"],a["cheque_no"],a["utr_ref_no"],user))
             count += 1
     return count
-
-
 # ── Ledger helpers ────────────────────────────────────────────────────────────
-
+@st.cache_data(ttl=300)
 def _ledger_fund_summary(fy_str: str) -> list:
     """Income vs Expenses vs Balance per fund source."""
     with _cursor() as c:
@@ -511,6 +441,7 @@ def _ledger_fund_summary(fy_str: str) -> list:
         r["balance"] = r["income"] - r["expenses"]
     return result
 
+@st.cache_data(ttl=300)
 def _ledger_festival_summary(fy_str: str) -> list:
     """Income vs Expenses vs Balance per festival."""
     with _cursor() as c:
@@ -550,6 +481,7 @@ def _ledger_festival_summary(fy_str: str) -> list:
         r["balance"] = r["income"] - r["expenses"]
     return [r for r in result if r["income"] > 0 or r["expenses"] > 0]
 
+@st.cache_data(ttl=300)
 def _ledger_cashbook(fy_str: str, date_from=None, date_to=None, fund_id=None) -> list:
     """All transactions (income + expenses) in date order."""
     params_i = [fy_str]
@@ -564,7 +496,6 @@ def _ledger_cashbook(fy_str: str, date_from=None, date_to=None, fund_id=None) ->
     if fund_id:
         where_i += " AND i.fund_source_id = %s"; params_i.append(fund_id)
         where_e += " AND e.fund_source_id = %s"; params_e.append(fund_id)
-
     sql = f"""
         SELECT i.txn_date, 'INCOME' txn_type,
                i.donor_name description, NULL paid_to,
@@ -592,7 +523,7 @@ def _ledger_cashbook(fy_str: str, date_from=None, date_to=None, fund_id=None) ->
         c.execute(sql, params_i + params_e)
         return _rows(c)
 
-
+@st.cache_data(ttl=300)
 def _ledger_fund_transactions(fy_str: str, fund_code: str) -> list:
     """All transactions (income + expense) for one fund, with unique IDs."""
     with _cursor() as c:
@@ -622,6 +553,7 @@ def _ledger_fund_transactions(fy_str: str, fund_code: str) -> list:
         """, (fy_str, fund_code, fy_str, fund_code))
         return _rows(c)
 
+@st.cache_data(ttl=300)
 def _ledger_festival_transactions(fy_str: str, festival_name: str) -> list:
     """All transactions for one festival, with unique IDs."""
     if festival_name == "General / No Festival":
@@ -663,7 +595,6 @@ def _ledger_festival_transactions(fy_str: str, festival_name: str) -> list:
         return _rows(c)
 
 # ── Edit / Void helpers ────────────────────────────────────────────────────────
-
 def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
     with _cursor() as c:
         c.execute("""
@@ -683,7 +614,6 @@ def _search_expenses(fy_str: str, q: str = "", limit: int = 100) -> list:
             ORDER BY et.txn_date DESC, et.id DESC LIMIT %s
         """, (fy_str, q, f"%{q}%", f"%{q}%", q, q, limit))
         return _rows(c)
-
 def _update_expense(txn_id: int, upd: dict):
     with _cursor() as c:
         c.execute("""
@@ -696,14 +626,10 @@ def _update_expense(txn_id: int, upd: dict):
               upd["major_head_id"], upd["amount"], upd["payment_mode"],
               upd["cheque_no"], upd["utr_ref_no"],
               upd["description"], upd["paid_to"], txn_id))
-
 def _void_expense(txn_id: int):
     with _cursor() as c:
         c.execute("DELETE FROM expense_transactions WHERE id=%s", (txn_id,))
-
-
 # ── CSS ────────────────────────────────────────────────────────────────────────
-
 def _css():
     st.markdown("""<style>
     div[data-testid="stForm"] label{font-size:.78rem!important;font-weight:600!important;color:#475569!important}
@@ -727,18 +653,13 @@ def _css():
         background:#1e40af!important;color:white!important;border:none!important;
         border-radius:6px!important;font-weight:600!important;font-size:.85rem!important}
     </style>""", unsafe_allow_html=True)
-
-
 # ── Main ───────────────────────────────────────────────────────────────────────
-
 def render_expense_entry(user: str):
     _css()
-
     fs_list   = _fund_sources()
     fest_list = _festivals()
     mh_list   = _major_heads()
     sa_list   = _standing()
-
     # Lookup dicts
     fs_by_id   = {f["id"]: f for f in fs_list}
     fs_by_code = {f["code"]: f["id"] for f in fs_list}
@@ -746,9 +667,7 @@ def render_expense_entry(user: str):
     mh_by_code = {m["code"]: m["id"] for m in mh_list}
     fest_by_id   = {f["id"]: f for f in fest_list}
     fest_by_code = {f["code"]: f["id"] for f in fest_list}
-
     tabs = st.tabs(["✏️ New Expense","👤 Manikandan A/C","📥 Import Excel","📌 Standing Amts","🕐 Recent","📒 Ledger","🔧 Edit/Void"])
-
     # ═══════════════════════════════════════════════════════════
     # TAB 1 — New Expense
     # ═══════════════════════════════════════════════════════════
@@ -756,9 +675,7 @@ def render_expense_entry(user: str):
         # ── Prefill amount from hint-button click ────────────────
         if "_pf_amount" in st.session_state:
             st.session_state["ne_amount"] = float(st.session_state.pop("_pf_amount"))
-
         st.markdown("#### 🧾 Record Expense")
-
         # Row 1 — Date / Mode / Fund / Festival
         c1,c2,c3,c4 = st.columns([1.1,0.9,1.4,1.4])
         with c1:
@@ -775,7 +692,6 @@ def render_expense_entry(user: str):
             ff = [f for f in fest_list if f["fund_source_id"]==fs_id]
             fo = {None:"— General —"} | {f["id"]: f["name"] for f in ff}
             fest_id = st.selectbox("Festival", list(fo), format_func=lambda x: fo[x], key="ne_fest")
-
         # Row 2 — Head / Amount
         c5,c6 = st.columns([2,1])
         with c5:
@@ -784,7 +700,6 @@ def render_expense_entry(user: str):
         with c6:
             amount = st.number_input("Amount (₹)", min_value=1.0, max_value=500000.0,
                 step=50.0, format="%.2f", key="ne_amount")
-
         # Row 3 — Clickable standing-amount hints (live, updates on every Head change)
         hint_matches = [s for s in sa_list
                         if s["major_head_id"] == mh_id
@@ -801,7 +716,6 @@ def render_expense_entry(user: str):
                                  ):
                         st.session_state["_pf_amount"] = float(s["default_amount"])
                         st.rerun()
-
         # Row 4 — Cheque / Description / Paid To
         c8,c9,c10 = st.columns([1,1.5,1.5])
         cheque_no = utr = None
@@ -816,7 +730,6 @@ def render_expense_entry(user: str):
             desc    = st.text_input("Description", max_chars=50, placeholder="e.g. April flowers NPK",  key="ne_desc") or None
         with c10:
             paid_to = st.text_input("Paid To",     max_chars=50, placeholder="e.g. Subramania Pillai", key="ne_paid") or None
-
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("💾 Save Expense", type="primary", key="ne_save"):
             errs = []
@@ -838,14 +751,12 @@ def render_expense_entry(user: str):
                     st.rerun()
                 except Exception as ex:
                     st.error(f"Save failed: {ex}")
-
     # ═══════════════════════════════════════════════════════════
     # TAB 2 — Manikandan A/C
     # ═══════════════════════════════════════════════════════════
     with tabs[1]:
         today = date.today()
         fy_str = _fy(today)
-
         try:
             adv, exp = _priest_balance(fy_str)
             balance = adv - exp
@@ -864,9 +775,7 @@ def render_expense_entry(user: str):
         except Exception:
             st.info("Run schema_patch.sql in Neon first to enable this tab.")
             st.stop()
-
         action = st.radio("Action", ["Issue Advance","Record Settlement"], horizontal=True)
-
         if action == "Issue Advance":
             with st.form("adv_form", clear_on_submit=True):
                 ca,cb,cc = st.columns([1.2,1,1.2])
@@ -894,7 +803,6 @@ def render_expense_entry(user: str):
                     st.rerun()
                 except Exception as ex:
                     st.error(f"Failed: {ex}")
-
         else:  # Record Settlement
             with st.form("settle_form", clear_on_submit=True):
                 s1,s2,s3,s4 = st.columns([1.2,1.4,1.4,1])
@@ -920,7 +828,6 @@ def render_expense_entry(user: str):
                     st.rerun()
                 except Exception as ex:
                     st.error(f"Failed: {ex}")
-
         # Ledger
         st.markdown("---")
         st.markdown("**Recent transactions**")
@@ -945,22 +852,17 @@ def render_expense_entry(user: str):
                 </div>""", unsafe_allow_html=True)
         except Exception as ex:
             st.error(f"Ledger error: {ex}")
-
     # ═══════════════════════════════════════════════════════════
     # TAB 3 — Import Excel
     # ═══════════════════════════════════════════════════════════
     with tabs[2]:
         st.markdown("#### 📥 Import from Excel")
-
         import_mode = st.radio("What to import", ["Expenses (EXP sheet)", "Receipts / Collections (RECEIPTS sheet)"],
                                horizontal=True, key="import_mode")
-
         uploaded = st.file_uploader("Choose .xlsx file", type=["xlsx"],
                                     key="import_xlsx")
-
         if uploaded:
             import pandas as pd
-
             # ════════════════════════════════════════════════════
             # MODE A — EXPENSES
             # ════════════════════════════════════════════════════
@@ -968,15 +870,12 @@ def render_expense_entry(user: str):
                 with st.spinner("Parsing EXP sheet..."):
                     rows, skipped, advances = _parse_excel(
                         uploaded, fs_by_code, mh_by_code, fest_by_code)
-
                 ok_rows   = [r for r in rows if not r.get("_needs_review")]
                 warn_rows = [r for r in rows if r.get("_needs_review")]
-
                 col1, col2, col3 = st.columns(3)
                 col1.metric("✅ Ready to import", len(ok_rows))
                 col2.metric("⚠️ Needs review",    len(warn_rows))
                 col3.metric("🔵 Mani advances",   len(advances))
-
                 if ok_rows:
                     st.markdown("**Ready rows (sample — first 20)**")
                     preview = pd.DataFrame([{
@@ -986,7 +885,6 @@ def render_expense_entry(user: str):
                         "Description": (r["description"] or "")[:40],
                     } for r in ok_rows[:20]])
                     st.dataframe(preview, hide_index=True)
-
                 if warn_rows:
                     st.markdown("**⚠️ Rows needing manual head assignment**")
                     for i, r in enumerate(warn_rows):
@@ -1003,18 +901,15 @@ def render_expense_entry(user: str):
                             if chosen:
                                 warn_rows[i]["major_head_id"] = chosen
                                 warn_rows[i]["_needs_review"] = False
-
                 if skipped:
                     with st.expander(f"Skipped rows ({len(skipped)})"):
                         for s in skipped: st.caption(s)
-
                 if advances:
                     st.markdown("**🔵 Manikandan advances found**")
                     adv_df = [{"Date":a["txn_date"],"₹":a["amount"],
                                "Mode":a["payment_mode"],"Ref":a["cheque_no"] or "",
                                "Description":a["description"]} for a in advances]
                     st.dataframe(adv_df, hide_index=True)
-
                 st.markdown("---")
                 bcol1, bcol2 = st.columns(2)
                 with bcol1:
@@ -1035,7 +930,6 @@ def render_expense_entry(user: str):
                                 st.cache_data.clear()
                             except Exception as ex:
                                 st.error(f"Import failed: {ex}")
-
             # ════════════════════════════════════════════════════
             # MODE B — RECEIPTS / COLLECTIONS
             # ════════════════════════════════════════════════════
@@ -1043,19 +937,16 @@ def render_expense_entry(user: str):
                 with st.spinner("Parsing RECEIPTS sheet..."):
                     rec_rows, rec_skipped = _parse_receipts_excel(
                         uploaded, fs_by_code, fest_by_code)
-
                 # Summary by fund
                 fund_totals = {}
                 for r in rec_rows:
                     k = r["_fund_code"]
                     fund_totals[k] = fund_totals.get(k, 0) + r["total_amount"]
-
                 grand = sum(fund_totals.values())
                 mc1, mc2, mc3 = st.columns(3)
                 mc1.metric("📄 Rows to import", len(rec_rows))
                 mc2.metric("⏭️ Skipped",         len(rec_skipped))
                 mc3.metric("💰 Total ₹",          f"{grand:,.0f}")
-
                 # Fund-wise breakdown
                 if fund_totals:
                     st.markdown("**Fund-wise breakdown**")
@@ -1063,7 +954,6 @@ def render_expense_entry(user: str):
                         {"Fund": k, "₹ Total": f"{v:,.0f}"}
                         for k, v in sorted(fund_totals.items())
                     ]), hide_index=True)
-
                 # Preview first 30 rows
                 if rec_rows:
                     st.markdown("**Preview (first 30 rows)**")
@@ -1078,11 +968,9 @@ def render_expense_entry(user: str):
                         "Type":    r["income_type"],
                     } for r in rec_rows[:30]])
                     st.dataframe(prev, hide_index=True)
-
                 if rec_skipped:
                     with st.expander(f"Skipped rows ({len(rec_skipped)})"):
                         for s in rec_skipped: st.caption(s)
-
                 st.markdown("---")
                 if st.button("🚀 Import Receipts", type="primary",
                              disabled=not rec_rows):
@@ -1092,7 +980,6 @@ def render_expense_entry(user: str):
                         st.cache_data.clear()
                     except Exception as ex:
                         st.error(f"Import failed: {ex}")
-
     # ═══════════════════════════════════════════════════════════
     # TAB 4 — Standing Amounts
     # ═══════════════════════════════════════════════════════════
@@ -1114,7 +1001,6 @@ def render_expense_entry(user: str):
                         "₹ Default": f"{i['default_amount']:,.2f}",
                         "Notes": i["notes"] or "",
                     } for i in items]), hide_index=True)
-
     # ═══════════════════════════════════════════════════════════
     # TAB 5 — Recent Entries
     # ═══════════════════════════════════════════════════════════
@@ -1144,15 +1030,12 @@ def render_expense_entry(user: str):
                 <br><span style="color:#94a3b8;font-size:.72rem">{icon} {e['entered_by']}</span>
               </div>
             </div>""", unsafe_allow_html=True)
-
     # ═══════════════════════════════════════════════════════════
     # TAB 6 — Ledger
     # ═══════════════════════════════════════════════════════════
     with tabs[5]:
         st.markdown("#### 📒 Ledger — FY Summary & Cash Book")
-
         import pandas as pd
-
         def _show_txn_drilldown(txns: list, title: str):
             """Render a transaction drilldown table with unique IDs and major-head breakdown."""
             if not txns:
@@ -1188,16 +1071,13 @@ def render_expense_entry(user: str):
                 bk_df = pd.DataFrame([{"Head": h, "Total ₹": f"{v:,.2f}"} for h, v in bk_rows])
                 st.dataframe(bk_df, hide_index=True)
                 st.caption(f"Total expenses: ₹{sum(bk.values()):,.2f}")
-
         # FY selector
         cur_fy = _fy(date.today())
         yr = int(cur_fy[:4])
         fy_opts = [cur_fy, f"{yr-1}-{str(yr)[2:]}", f"{yr+1}-{str(yr+2)[2:]}"]
         led_fy = st.selectbox("Financial Year", fy_opts, key="led_fy")
-
         sub = st.radio("View", ["Fund-wise Summary","Festival-wise Summary","Cash Book"],
                        horizontal=True, key="led_view")
-
         # ── Fund-wise summary ───────────────────────────────────
         if sub == "Fund-wise Summary":
             try:
@@ -1241,7 +1121,6 @@ def render_expense_entry(user: str):
                         _show_txn_drilldown(drill, sel_f)
                     except Exception as ex:
                         st.error(f"Error: {ex}")
-
         # ── Festival-wise summary ───────────────────────────────
         elif sub == "Festival-wise Summary":
             try:
@@ -1269,7 +1148,6 @@ def render_expense_entry(user: str):
                         _show_txn_drilldown(drill_fv, sel_fv)
                     except Exception as ex:
                         st.error(f"Error: {ex}")
-
         # ── Cash Book ───────────────────────────────────────────
         else:
             fc1, fc2, fc3 = st.columns([1.2, 1.2, 1.6])
@@ -1281,14 +1159,12 @@ def render_expense_entry(user: str):
                 fund_opts_l = {None: "All Funds"} | {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
                 cb_fund = st.selectbox("Fund", list(fund_opts_l),
                                        format_func=lambda x: fund_opts_l[x], key="cb_fund")
-
             if st.button("\U0001f50d Load Cash Book", key="cb_load"):
                 try:
                     cb_rows = _ledger_cashbook(led_fy, cb_from, cb_to, cb_fund)
                     st.session_state["cb_rows"] = cb_rows
                 except Exception as ex:
                     st.error(f"Error: {ex}")
-
             cb_rows = st.session_state.get("cb_rows")
             if cb_rows is not None:
                 if not cb_rows:
@@ -1312,13 +1188,11 @@ def render_expense_entry(user: str):
                         })
                     st.dataframe(pd.DataFrame(table_rows), hide_index=True)
                     st.caption(f"{len(cb_rows)} transactions | Running balance: ₹{running:,.2f}")
-
     # ===========================================================
     # TAB 7 -- Edit / Void
     # ===========================================================
     with tabs[6]:
         st.markdown("#### \U0001f527 Edit or Void an Expense")
-
         cur_fy2 = _fy(date.today())
         yr2 = int(cur_fy2[:4])
         fy_options2 = [
@@ -1326,20 +1200,16 @@ def render_expense_entry(user: str):
             f"{yr2-1}-{str(yr2)[2:]}",
             f"{yr2+1}-{str(yr2+2)[2:]}",
         ]
-
         sc1, sc2 = st.columns([1, 3])
         with sc1:
             ev_fy = st.selectbox("Financial Year", fy_options2, key="ev_fy")
         with sc2:
             ev_q = st.text_input("Search description, paid-to, cheque no, or row ID",
                                  key="ev_q", placeholder="e.g. flowers  or  42")
-
         if st.button("\U0001f50d Search", key="ev_search"):
             st.session_state.ev_results = _search_expenses(ev_fy, ev_q.strip())
             st.session_state.ev_sel = None
-
         results_ev = st.session_state.get("ev_results")
-
         if results_ev is not None:
             if not results_ev:
                 st.info("No entries found. Try a different keyword or FY.")
@@ -1357,7 +1227,6 @@ def render_expense_entry(user: str):
                 } for r in results_ev])
                 st.dataframe(preview_ev, hide_index=True)
                 st.caption(f"{len(results_ev)} entries found")
-
                 id_label = {
                     r["id"]: f"#{r['id']} · {r['txn_date'].strftime('%d %b %Y')} · "
                              f"{r['fund_code']} · ₹{float(r['amount']):,.0f}"
@@ -1370,12 +1239,10 @@ def render_expense_entry(user: str):
                     format_func=lambda x: "— pick a row —" if x is None else id_label[x],
                     key="ev_sel",
                 )
-
                 if sel_id:
                     sel = next(r for r in results_ev if r["id"] == sel_id)
                     st.markdown("---")
                     st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; entered by `{sel['entered_by']}`")
-
                     with st.form("edit_expense_form"):
                         fe1,fe2,fe3,fe4 = st.columns([1.1,0.9,1.4,1.4])
                         with fe1:
@@ -1404,7 +1271,6 @@ def render_expense_entry(user: str):
                                 index=fk_e.index(sel["festival_id"])
                                       if sel["festival_id"] in fk_e else 0,
                                 format_func=lambda x: fo_e[x])
-
                         fe5,fe6 = st.columns([2,1])
                         with fe5:
                             mh_opts_e = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
@@ -1418,7 +1284,6 @@ def render_expense_entry(user: str):
                             e_amt = st.number_input("Amount", min_value=1.0,
                                                     value=float(sel["amount"]),
                                                     step=50.0, format="%.2f")
-
                         fe7,fe8,fe9 = st.columns([1,1.5,1.5])
                         e_chq = e_utr = None
                         with fe7:
@@ -1438,14 +1303,12 @@ def render_expense_entry(user: str):
                             e_paid = st.text_input("Paid To",
                                                    value=sel.get("paid_to") or "",
                                                    max_chars=50) or None
-
                         st.markdown("<br>", unsafe_allow_html=True)
                         btn_save, btn_void = st.columns([3,1])
                         with btn_save:
                             do_save = st.form_submit_button("\U0001f4be Save Changes", type="primary")
                         with btn_void:
                             do_void = st.form_submit_button("\U0001f5d1 Void/Delete", type="secondary")
-
                     if do_save:
                         try:
                             _update_expense(sel_id, {
@@ -1461,7 +1324,6 @@ def render_expense_entry(user: str):
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Save failed: {ex}")
-
                     if do_void:
                         try:
                             _void_expense(sel_id)
