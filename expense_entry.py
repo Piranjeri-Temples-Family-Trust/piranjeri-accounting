@@ -6,12 +6,13 @@ import pg8000.dbapi as _pg
 from urllib.parse import urlparse, unquote
 from datetime import date
 from contextlib import contextmanager
+import os
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
 
 def _connect():
-    dsn = st.secrets["neon"]["dsn"]
+    dsn = os.environ.get("NEON_DSN") or st.secrets["neon"]["dsn"]
     u = urlparse(dsn)
     return _pg.connect(
         host=u.hostname,
