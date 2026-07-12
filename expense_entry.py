@@ -186,6 +186,88 @@ def _trial_balance(date_from, date_to):
         inc_rows = _rows(c)
     return exp_rows, inc_rows
 
+# ── Bank statement functions ───────────────────────────────────────────────────
+def _bank_opening(fy_str):
+    """Return opening balances for a FY. Returns None if table missing or no row."""
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT savings_balance, fixed_deposit_balance, cash_balance, as_at, notes
+                FROM bank_opening_balances WHERE fy=%s
+            """, (fy_str,))
+            return _row(c)
+    except Exception:
+        return None
+
+def _bank_movements(date_from, date_to):
+    """All bank-mode credits and debits for a period, sorted by date."""
+    rows = []
+    # Credits from income_transactions (bank_amount > 0)
+    with _cursor() as c:
+        c.execute("""
+            SELECT txn_date AS dt,
+                   COALESCE(donor_name, income_type, 'Income') AS narration,
+                   bank_amount AS credit, 0.00 AS debit,
+                   'INCOME' AS src, payment_mode AS mode
+            FROM income_transactions
+            WHERE bank_amount > 0
+              AND txn_date >= %s AND txn_date <= %s
+        """, (date_from, date_to))
+        rows += _rows(c)
+    # Credits from receipts table (cheque or bank_transfer)
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT issue_date::date AS dt,
+                       name || ' — ' || purpose AS narration,
+                       amount AS credit, 0.00 AS debit,
+                       'RECEIPT' AS src, payment AS mode
+                FROM receipts
+                WHERE payment IN ('cheque','bank_transfer')
+                  AND (status IS NULL OR status != 'CANCELLED')
+                  AND issue_date >= %s AND issue_date <= %s
+            """, (str(date_from), str(date_to)))
+            rows += _rows(c)
+    except Exception:
+        pass
+    # Debits from expense_transactions (cheque or bank transfer)
+    with _cursor() as c:
+        c.execute("""
+            SELECT et.txn_date AS dt,
+                   COALESCE(et.description, mh.name) AS narration,
+                   0.00 AS credit, et.amount AS debit,
+                   'EXPENSE' AS src, et.payment_mode AS mode
+            FROM expense_transactions et
+            JOIN major_heads mh ON mh.id = et.major_head_id
+            WHERE et.payment_mode IN ('CHEQUE','BANK_TRANSFER')
+              AND et.txn_date >= %s AND et.txn_date <= %s
+        """, (date_from, date_to))
+        rows += _rows(c)
+    # Sort by date
+    rows.sort(key=lambda r: r["dt"])
+    return rows
+
+def _bank_csv(movements, opening, d_from, d_to):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f"Bank Statement — Savings Account",
+                f"Period: {d_from.strftime('%d %b %Y')} to {d_to.strftime('%d %b %Y')}"])
+    w.writerow([])
+    w.writerow(["Date","Narration","Source","Mode","Credit ₹","Debit ₹","Balance ₹"])
+    bal = float(opening)
+    w.writerow(["Opening Balance","","","","","", f"{bal:.2f}"])
+    for r in movements:
+        cr = float(r["credit"])
+        dr = float(r["debit"])
+        bal = bal + cr - dr
+        dt = r["dt"].strftime("%d %b %Y") if hasattr(r["dt"], "strftime") else str(r["dt"])
+        w.writerow([dt, r.get("narration",""), r.get("src",""),
+                    r.get("mode",""),
+                    f"{cr:.2f}" if cr else "", f"{dr:.2f}" if dr else "",
+                    f"{bal:.2f}"])
+    w.writerow(["Closing Balance","","","","","", f"{bal:.2f}"])
+    return out.getvalue()
+
 # ── All Expenses ledger (no account filter) ────────────────────────────────────
 def _all_expenses_ledger(date_from, date_to):
     with _cursor() as c:
@@ -444,7 +526,7 @@ def render_expense_entry(user: str):
     mh_by_id   = {m["id"]: m for m in mh_list}
 
     tabs = st.tabs(["✏️ New Expense", "💰 New Income", "👤 Manikandan A/C",
-                    "📒 Account Ledger", "⚖️ Trial Balance", "🔧 Edit/Void"])
+                    "📒 Account Ledger", "⚖️ Trial Balance", "🏦 Bank Statement", "🔧 Edit/Void"])
 
     # ═══════════════════════════════════════════════════════════
     # TAB 1 — New Expense
@@ -1066,10 +1148,170 @@ def render_expense_entry(user: str):
             """, unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════════
-    # TAB 6 — Edit / Void
+    # TAB 6 — Bank Statement
     # ═══════════════════════════════════════════════════════════
     with tabs[5]:
-        st.markdown("#### 🔧 Edit or Void an Expense")
+        st.markdown("#### 🏦 Bank Statement — Savings Account")
+
+        _today2 = date.today()
+        _fy_yr2 = _today2.year if _today2.month >= 4 else _today2.year - 1
+        cur_fy2 = f"{_fy_yr2}-{str(_fy_yr2+1)[2:]}"
+
+        # FY selector
+        bk_fy_opts = [cur_fy2, f"{_fy_yr2-1}-{str(_fy_yr2)[2:]}"]
+        bk_fy = st.selectbox("Financial Year", bk_fy_opts, key="bk_fy")
+
+        # Derive date range for selected FY
+        bk_yr = int(bk_fy[:4])
+        bk_d_from = date(bk_yr, 4, 1)
+        bk_d_to   = date(bk_yr+1, 3, 31) if _today2 > date(bk_yr+1, 3, 31) else _today2
+
+        bk1, bk2 = st.columns(2)
+        with bk1: bk_from = st.date_input("From", value=bk_d_from, key="bk_from")
+        with bk2: bk_to   = st.date_input("To",   value=bk_d_to,   key="bk_to")
+
+        if st.button("📊 Generate Bank Statement", type="primary", key="bk_load"):
+            ob = _bank_opening(bk_fy)
+            if ob is None:
+                st.warning("⚠️ Opening balance not found for this FY. "
+                           "Please run `bank_setup.sql` in Neon SQL Editor first.")
+            else:
+                ob_savings = float(ob["savings_balance"])
+                ob_fd      = float(ob["fixed_deposit_balance"])
+                ob_cash    = float(ob["cash_balance"])
+
+                # Opening balance cards
+                st.markdown(f"""
+                <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+                  <div style="background:#1e40af;color:white;border-radius:8px;
+                              padding:.8rem 1.2rem;flex:1;min-width:160px">
+                    <div style="font-size:.7rem;opacity:.8">OPENING SAVINGS BALANCE</div>
+                    <div style="font-size:1.3rem;font-weight:700">₹{ob_savings:,.2f}</div>
+                    <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+                  </div>
+                  <div style="background:#0d9488;color:white;border-radius:8px;
+                              padding:.8rem 1.2rem;flex:1;min-width:160px">
+                    <div style="font-size:.7rem;opacity:.8">FIXED DEPOSIT</div>
+                    <div style="font-size:1.3rem;font-weight:700">₹{ob_fd:,.2f}</div>
+                    <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+                  </div>
+                  <div style="background:#7c3aed;color:white;border-radius:8px;
+                              padding:.8rem 1.2rem;flex:1;min-width:160px">
+                    <div style="font-size:.7rem;opacity:.8">CASH IN HAND</div>
+                    <div style="font-size:1.3rem;font-weight:700">₹{ob_cash:,.2f}</div>
+                    <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if ob.get("notes"):
+                    st.caption(f"Source: {ob['notes']}")
+
+                movements = _bank_movements(bk_from, bk_to)
+
+                if not movements:
+                    st.info("No bank transactions for this period.")
+                else:
+                    running = ob_savings
+                    total_cr = total_dr = 0.0
+                    rows_html = ""
+                    for r in movements:
+                        cr = float(r["credit"])
+                        dr = float(r["debit"])
+                        running = running + cr - dr
+                        total_cr += cr
+                        total_dr += dr
+                        dt = r["dt"].strftime("%d %b %Y") if hasattr(r["dt"],"strftime") else str(r["dt"])
+                        # Source badge
+                        src = r.get("src","")
+                        if src == "INCOME":
+                            src_badge = "Fund"
+                            badge_bg = "#dcfce7"
+                            badge_fg = "#166534"
+                        elif src == "RECEIPT":
+                            src_badge = "Receipt"
+                            badge_bg = "#ccfbf1"
+                            badge_fg = "#0d9488"
+                        else:
+                            src_badge = "Expense"
+                            badge_bg = "#fee2e2"
+                            badge_fg = "#991b1b"
+                        badge_html = (f"<span style=\"background:{badge_bg};color:{badge_fg};"
+                                      f"padding:1px 5px;border-radius:3px;font-size:.72rem\">"
+                                      f"{src_badge}</span>")
+                        cr_cell = (f"<td style=\"text-align:right;padding:5px 8px;color:#166534\">&#8377;{cr:,.2f}</td>" if cr
+                                   else "<td style=\"padding:5px 8px\"></td>")
+                        dr_cell = (f"<td style=\"text-align:right;padding:5px 8px;color:#991b1b\">&#8377;{dr:,.2f}</td>" if dr
+                                   else "<td style=\"padding:5px 8px\"></td>")
+                        rows_html += (
+                            f"<tr style=\"border-bottom:1px solid #e2e8f0\">"
+                            f"<td style=\"padding:5px 8px\">{dt}</td>"
+                            f"<td style=\"padding:5px 8px\">{r.get('narration','')[:55]}</td>"
+                            f"<td style=\"padding:5px 8px\">{badge_html}</td>"
+                            f"<td style=\"padding:5px 8px;color:#64748b;font-size:.78rem\">"
+                            f"{(r.get('mode') or '').replace('_',' ')}</td>"
+                            f"{cr_cell}{dr_cell}"
+                            f"<td style=\"text-align:right;font-weight:600;padding:5px 8px\">&#8377;{running:,.2f}</td>"
+                            f"</tr>"
+                        )
+
+                    foot = (
+                        "<tfoot><tr style=\"font-weight:700;background:#f0fdf4\">"
+                        "<td colspan=\"4\" style=\"padding:6px 8px\">CLOSING BALANCE</td>"
+                        f"<td style=\"text-align:right;padding:6px 8px;color:#166534\">&#8377;{total_cr:,.2f}</td>"
+                        f"<td style=\"text-align:right;padding:6px 8px;color:#991b1b\">&#8377;{total_dr:,.2f}</td>"
+                        f"<td style=\"text-align:right;padding:6px 8px\">&#8377;{running:,.2f}</td>"
+                        "</tr></tfoot>"
+                    )
+                    st.markdown(
+                        "<table style=\"width:100%;border-collapse:collapse;font-size:.8rem\">"
+                        "<thead><tr style=\"background:#1e40af;color:white\">"
+                        "<th style=\"padding:6px 8px\">Date</th>"
+                        "<th style=\"padding:6px 8px\">Narration</th>"
+                        "<th style=\"padding:6px 8px\">Type</th>"
+                        "<th style=\"padding:6px 8px\">Mode</th>"
+                        "<th style=\"text-align:right;padding:6px 8px\">Credit</th>"
+                        "<th style=\"text-align:right;padding:6px 8px\">Debit</th>"
+                        "<th style=\"text-align:right;padding:6px 8px\">Balance</th>"
+                        f"</tr></thead><tbody>{rows_html}</tbody>{foot}</table>",
+                        unsafe_allow_html=True
+                    )
+
+                    net = total_cr - total_dr
+                    cl_color = "#1e40af" if running >= 0 else "#991b1b"
+                    st.markdown(
+                        f"<div style=\"display:flex;gap:1rem;flex-wrap:wrap;margin-top:.8rem\">"
+                        f"<div style=\"background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;"
+                        f"padding:.7rem 1rem;flex:1;min-width:130px\">"
+                        f"<div style=\"font-size:.7rem;color:#64748b\">OPENING</div>"
+                        f"<div style=\"font-weight:700\">&#8377;{ob_savings:,.2f}</div></div>"
+                        f"<div style=\"background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;"
+                        f"padding:.7rem 1rem;flex:1;min-width:130px\">"
+                        f"<div style=\"font-size:.7rem;color:#64748b\">CREDITS</div>"
+                        f"<div style=\"font-weight:700;color:#166534\">&#8377;{total_cr:,.2f}</div></div>"
+                        f"<div style=\"background:#fff5f5;border:1px solid #fecaca;border-radius:8px;"
+                        f"padding:.7rem 1rem;flex:1;min-width:130px\">"
+                        f"<div style=\"font-size:.7rem;color:#64748b\">DEBITS</div>"
+                        f"<div style=\"font-weight:700;color:#991b1b\">&#8377;{total_dr:,.2f}</div></div>"
+                        f"<div style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;"
+                        f"padding:.7rem 1rem;flex:1;min-width:130px\">"
+                        f"<div style=\"font-size:.7rem;color:#64748b\">CLOSING</div>"
+                        f"<div style=\"font-weight:700;color:{cl_color}\">&#8377;{running:,.2f}</div></div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    csv_data = _bank_csv(movements, ob_savings, bk_from, bk_to)
+                    st.download_button(
+                        "\u2b07\ufe0f Download CSV",
+                        data=csv_data,
+                        file_name=f"Bank_Statement_{bk_fy}_{bk_from.strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+
+    # ═══════════════════════════════════════════════════════════
+    # TAB 7 — Edit / Void
+    # ═══════════════════════════════════════════════════════════
+    with tabs[6]:
+        st.markdown("#### \U0001f527 Edit or Void an Expense")
 
         cur_fy = _fy(date.today())
         yr = int(cur_fy[:4])
@@ -1080,7 +1322,7 @@ def render_expense_entry(user: str):
         with ec2: ev_q  = st.text_input("Search description or ID",
                                          key="ev_q", placeholder="e.g. flowers  or  42")
 
-        if st.button("🔍 Search", key="ev_search"):
+        if st.button("\U0001f50d Search", key="ev_search"):
             st.session_state.ev_results = _search_expenses(ev_fy, ev_q.strip())
             st.session_state.ev_sel = None
 
@@ -1091,41 +1333,44 @@ def render_expense_entry(user: str):
             else:
                 rows_html = ""
                 for r in results_ev:
-                    rows_html += (f"<tr style='border-bottom:1px solid #e2e8f0'>"
-                                  f"<td style='padding:5px 8px'>#{r['id']}</td>"
-                                  f"<td style='padding:5px 8px'>{r['txn_date'].strftime('%d %b %Y')}</td>"
-                                  f"<td style='padding:5px 8px'>{r['fund_code']}</td>"
-                                  f"<td style='padding:5px 8px'>{r['mh_code']}</td>"
-                                  f"<td style='text-align:right;padding:5px 8px'>₹{float(r['amount']):,.2f}</td>"
-                                  f"<td style='padding:5px 8px'>{(r.get('description') or '')[:40]}</td>"
-                                  f"</tr>")
-                st.markdown(f"""
-                <table style="width:100%;border-collapse:collapse;font-size:.8rem">
-                <thead><tr style="background:#1e40af;color:white">
-                  <th style="padding:6px 8px">ID</th><th style="padding:6px 8px">Date</th>
-                  <th style="padding:6px 8px">Fund</th><th style="padding:6px 8px">Head</th>
-                  <th style="text-align:right;padding:6px 8px">Amount</th>
-                  <th style="padding:6px 8px">Description</th>
-                </tr></thead>
-                <tbody>{rows_html}</tbody>
-                </table>
-                """, unsafe_allow_html=True)
+                    rows_html += (
+                        f"<tr style=\"border-bottom:1px solid #e2e8f0\">"
+                        f"<td style=\"padding:5px 8px\">#{r['id']}</td>"
+                        f"<td style=\"padding:5px 8px\">{r['txn_date'].strftime('%d %b %Y')}</td>"
+                        f"<td style=\"padding:5px 8px\">{r['fund_code']}</td>"
+                        f"<td style=\"padding:5px 8px\">{r['mh_code']}</td>"
+                        f"<td style=\"text-align:right;padding:5px 8px\">&#8377;{float(r['amount']):,.2f}</td>"
+                        f"<td style=\"padding:5px 8px\">{(r.get('description') or '')[:40]}</td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    "<table style=\"width:100%;border-collapse:collapse;font-size:.8rem\">"
+                    "<thead><tr style=\"background:#1e40af;color:white\">"
+                    "<th style=\"padding:6px 8px\">ID</th><th style=\"padding:6px 8px\">Date</th>"
+                    "<th style=\"padding:6px 8px\">Fund</th><th style=\"padding:6px 8px\">Head</th>"
+                    "<th style=\"text-align:right;padding:6px 8px\">Amount</th>"
+                    f"<th style=\"padding:6px 8px\">Description</th>"
+                    f"</tr></thead><tbody>{rows_html}</tbody></table>",
+                    unsafe_allow_html=True
+                )
                 st.caption(f"{len(results_ev)} entries found")
 
                 id_label = {
-                    r["id"]: f"#{r['id']} · {r['txn_date'].strftime('%d %b %Y')} · "
-                             f"{r['fund_code']} · ₹{float(r['amount']):,.0f}"
+                    r["id"]: f"#{r['id']} \u00b7 {r['txn_date'].strftime('%d %b %Y')} \u00b7 "
+                             f"{r['fund_code']} \u00b7 &#8377;{float(r['amount']):,.0f}"
                     for r in results_ev
                 }
-                sel_id = st.selectbox("Select entry to edit / void",
+                sel_id = st.selectbox(
+                    "Select entry to edit / void",
                     options=[None] + list(id_label.keys()),
-                    format_func=lambda x: "— pick a row —" if x is None else id_label[x],
-                    key="ev_sel")
+                    format_func=lambda x: "\u2014 pick a row \u2014" if x is None else id_label[x],
+                    key="ev_sel"
+                )
 
                 if sel_id:
                     sel = next(r for r in results_ev if r["id"] == sel_id)
                     st.markdown("---")
-                    st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; entered by `{sel['entered_by']}`")
+                    st.markdown(f"**Editing #{sel['id']}** \u00b7 entered by `{sel['entered_by']}`")
                     with st.form("edit_form"):
                         fe1, fe2, fe3 = st.columns([1.1, 0.9, 1.4])
                         with fe1: e_date = st.date_input("Date", value=sel["txn_date"])
@@ -1136,7 +1381,7 @@ def render_expense_entry(user: str):
                                 format_func=lambda x: {"CASH":"Cash","CHEQUE":"Cheque",
                                                        "BANK_TRANSFER":"Bank Tfr"}[x])
                         with fe3:
-                            fs_opts_e = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
+                            fs_opts_e = {f["id"]: f"{f['code']} \u2014 {f['name']}" for f in fs_list}
                             fs_keys_e = list(fs_opts_e.keys())
                             e_fs = st.selectbox("Fund", fs_keys_e,
                                 index=fs_keys_e.index(sel["fund_source_id"])
@@ -1145,7 +1390,7 @@ def render_expense_entry(user: str):
 
                         fe4, fe5 = st.columns([2, 1])
                         with fe4:
-                            mh_opts_e = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
+                            mh_opts_e = {m["id"]: f"{m['code']} \u2014 {m['name']}" for m in mh_list}
                             mh_keys_e = list(mh_opts_e.keys())
                             e_mh = st.selectbox("Head", mh_keys_e,
                                 index=mh_keys_e.index(sel["major_head_id"])
@@ -1156,7 +1401,7 @@ def render_expense_entry(user: str):
                                 value=float(sel["amount"]), step=50.0, format="%.2f")
 
                         ff_e = [f for f in fest_list if f["fund_source_id"] == e_fs]
-                        fo_e = {None: "— General —"} | {f["id"]: f["name"] for f in ff_e}
+                        fo_e = {None: "\u2014 General \u2014"} | {f["id"]: f["name"] for f in ff_e}
                         fk_e = list(fo_e.keys())
                         e_fest = st.selectbox("Festival", fk_e,
                             index=fk_e.index(sel["festival_id"])
@@ -1173,8 +1418,8 @@ def render_expense_entry(user: str):
                             value=sel.get("paid_to") or "", max_chars=50) or None
 
                         b1, b2 = st.columns([3, 1])
-                        with b1: do_save = st.form_submit_button("💾 Save Changes", type="primary")
-                        with b2: do_void = st.form_submit_button("🗑️ Delete", type="secondary")
+                        with b1: do_save = st.form_submit_button("\U0001f4be Save Changes", type="primary")
+                        with b2: do_void = st.form_submit_button("\U0001f5d1\ufe0f Delete", type="secondary")
 
                     if do_save:
                         try:
@@ -1184,7 +1429,7 @@ def render_expense_entry(user: str):
                                 "amount": float(e_amt), "payment_mode": e_mode,
                                 "cheque_no": e_chq, "description": e_desc, "paid_to": e_paid
                             })
-                            st.success(f"✅ Entry #{sel_id} updated.")
+                            st.success(f"\u2705 Entry #{sel_id} updated.")
                             st.session_state.ev_results = None
                             st.cache_data.clear()
                             st.rerun()
@@ -1194,7 +1439,7 @@ def render_expense_entry(user: str):
                     if do_void:
                         try:
                             _void_expense(sel_id)
-                            st.success(f"✅ Entry #{sel_id} deleted.")
+                            st.success(f"\u2705 Entry #{sel_id} deleted.")
                             st.session_state.ev_results = None
                             st.cache_data.clear()
                             st.rerun()
