@@ -5,7 +5,9 @@ import pg8000.dbapi as _pg
 from urllib.parse import urlparse, unquote
 from datetime import date
 from contextlib import contextmanager
-import calendar
+from collections import defaultdict
+import csv
+import io
 import os
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
@@ -246,29 +248,54 @@ def _tr(date_str, desc, ref, debit, credit, balance):
             f"<td style='padding:5px 8px;color:#64748b'>{ref}</td>"
             f"{dr}{cr}{bl}</tr>")
 
-# ── Month selector helper ──────────────────────────────────────────────────────
-def _month_range(key_prefix):
-    today = date.today()
-    months = []
-    y, m = today.year, today.month
-    for _ in range(24):
-        months.append((y, m))
-        m -= 1
-        if m == 0:
-            m = 12; y -= 1
-    month_opts = {f"{yr}-{mo:02d}": date(yr, mo, 1).strftime("%B %Y") for yr, mo in months}
-    month_opts["custom"] = "Custom range..."
-    sel = st.selectbox("Period", list(month_opts),
-                       format_func=lambda x: month_opts[x], key=f"{key_prefix}_month")
-    if sel == "custom":
-        dc1, dc2 = st.columns(2)
-        with dc1: d_from = st.date_input("From", key=f"{key_prefix}_from")
-        with dc2: d_to   = st.date_input("To",   key=f"{key_prefix}_to")
-    else:
-        yr, mo = int(sel[:4]), int(sel[5:])
-        d_from = date(yr, mo, 1)
-        d_to   = date(yr, mo, calendar.monthrange(yr, mo)[1])
-    return d_from, d_to
+# ── CSV helper (no pandas / openpyxl needed) ───────────────────────────────────
+def _expense_csv(txns, account_name, d_from, d_to):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f"Account: {account_name}",
+                f"Period: {d_from.strftime('%d %b %Y')} to {d_to.strftime('%d %b %Y')}"])
+    w.writerow([])
+    w.writerow(["Date","Description","Paid To","Festival","Payment Mode","Amount ₹","Balance ₹"])
+    running = 0.0
+    for r in txns:
+        amt = float(r["amount"])
+        running += amt
+        w.writerow([
+            r["txn_date"].strftime("%d %b %Y"),
+            r.get("description",""),
+            r.get("paid_to",""),
+            r.get("festival_name",""),
+            r.get("payment_mode",""),
+            f"{amt:.2f}",
+            f"{running:.2f}",
+        ])
+    w.writerow([])
+    w.writerow(["","","","","TOTAL", f"{running:.2f}",""])
+    return out.getvalue()
+
+def _income_csv(txns, account_name, d_from, d_to):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f"Fund: {account_name}",
+                f"Period: {d_from.strftime('%d %b %Y')} to {d_to.strftime('%d %b %Y')}"])
+    w.writerow([])
+    w.writerow(["Date","Donor / Narration","Receipt No","Festival","Mode","Amount ₹","Balance ₹"])
+    running = 0.0
+    for r in txns:
+        amt = float(r["total_amount"])
+        running += amt
+        w.writerow([
+            r["txn_date"].strftime("%d %b %Y"),
+            r.get("donor_name",""),
+            r.get("receipt_no",""),
+            r.get("festival_name",""),
+            r.get("payment_mode",""),
+            f"{amt:.2f}",
+            f"{running:.2f}",
+        ])
+    w.writerow([])
+    w.writerow(["","","","","TOTAL", f"{running:.2f}",""])
+    return out.getvalue()
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 def _css():
@@ -543,7 +570,12 @@ def render_expense_entry(user: str):
                              ["Expense Account (E-01, E-02 ...)","Income / Fund Account"],
                              horizontal=True, key="al_type")
 
-        d_from, d_to = _month_range("al")
+        # Date range — same style as Trial Balance
+        _today = date.today()
+        _fy_yr = _today.year if _today.month >= 4 else _today.year - 1
+        al1, al2 = st.columns(2)
+        with al1: d_from = st.date_input("From", value=date(_fy_yr, 4, 1), key="al_from")
+        with al2: d_to   = st.date_input("To",   value=_today, key="al_to")
 
         if acct_type.startswith("Expense"):
             mh_opts2 = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
@@ -554,6 +586,7 @@ def render_expense_entry(user: str):
                 if not txns:
                     st.info("No transactions for this period.")
                 else:
+                    acct_label = mh_opts2[sel_mh]
                     running = 0.0
                     rows_html = ""
                     for r in txns:
@@ -572,6 +605,39 @@ def render_expense_entry(user: str):
                             f"<td></td><td></td></tr></tfoot>")
                     _ledger_table(rows_html, foot)
                     st.caption(f"{len(txns)} transactions · Total ₹{running:,.2f}")
+
+                    # ── Festival breakdown ──────────────────────────────────
+                    st.markdown("**Festival-wise Breakdown**")
+                    fest_totals = defaultdict(float)
+                    for r in txns:
+                        key = r.get("festival_name") or "General (No Festival)"
+                        fest_totals[key] += float(r["amount"])
+                    fb_rows = ""
+                    for fname, ftotal in sorted(fest_totals.items(), key=lambda x: -x[1]):
+                        pct = ftotal / running * 100 if running else 0
+                        fb_rows += (f"<tr style='border-bottom:1px solid #fecaca'>"
+                                    f"<td style='padding:5px 8px'>{fname}</td>"
+                                    f"<td style='text-align:right;padding:5px 8px'>₹{ftotal:,.2f}</td>"
+                                    f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
+                                    f"</tr>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
+                    <thead><tr style="background:#7c3aed;color:white">
+                      <th style="padding:6px 8px">Festival</th>
+                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                      <th style="text-align:right;padding:6px 8px">%</th>
+                    </tr></thead>
+                    <tbody>{fb_rows}</tbody>
+                    </table>
+                    """, unsafe_allow_html=True)
+
+                    # ── CSV download ────────────────────────────────────────
+                    csv_data = _expense_csv(txns, acct_label, d_from, d_to)
+                    fname_csv = (f"{mh_opts2[sel_mh].split('—')[0].strip()}_"
+                                 f"{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv")
+                    st.download_button("⬇️ Download CSV", data=csv_data,
+                                       file_name=fname_csv, mime="text/csv")
+
         else:
             fs_opts2 = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
             sel_fs = st.selectbox("Select Fund Account", list(fs_opts2),
@@ -581,6 +647,7 @@ def render_expense_entry(user: str):
                 if not txns:
                     st.info("No transactions for this period.")
                 else:
+                    acct_label = fs_opts2[sel_fs]
                     running = 0.0
                     rows_html = ""
                     for r in txns:
@@ -600,6 +667,38 @@ def render_expense_entry(user: str):
                             f"<td></td></tr></tfoot>")
                     _ledger_table(rows_html, foot)
                     st.caption(f"{len(txns)} transactions · Total ₹{running:,.2f}")
+
+                    # ── Festival breakdown ──────────────────────────────────
+                    st.markdown("**Festival-wise Breakdown**")
+                    fest_totals = defaultdict(float)
+                    for r in txns:
+                        key = r.get("festival_name") or "General (No Festival)"
+                        fest_totals[key] += float(r["total_amount"])
+                    fb_rows = ""
+                    for fname, ftotal in sorted(fest_totals.items(), key=lambda x: -x[1]):
+                        pct = ftotal / running * 100 if running else 0
+                        fb_rows += (f"<tr style='border-bottom:1px solid #bbf7d0'>"
+                                    f"<td style='padding:5px 8px'>{fname}</td>"
+                                    f"<td style='text-align:right;padding:5px 8px'>₹{ftotal:,.2f}</td>"
+                                    f"<td style='text-align:right;padding:5px 8px;color:#64748b'>{pct:.1f}%</td>"
+                                    f"</tr>")
+                    st.markdown(f"""
+                    <table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:.5rem">
+                    <thead><tr style="background:#7c3aed;color:white">
+                      <th style="padding:6px 8px">Festival</th>
+                      <th style="text-align:right;padding:6px 8px">Amount ₹</th>
+                      <th style="text-align:right;padding:6px 8px">%</th>
+                    </tr></thead>
+                    <tbody>{fb_rows}</tbody>
+                    </table>
+                    """, unsafe_allow_html=True)
+
+                    # ── CSV download ────────────────────────────────────────
+                    csv_data = _income_csv(txns, acct_label, d_from, d_to)
+                    fname_csv = (f"{fs_opts2[sel_fs].split('—')[0].strip()}_"
+                                 f"{d_from.strftime('%Y%m%d')}_to_{d_to.strftime('%Y%m%d')}.csv")
+                    st.download_button("⬇️ Download CSV", data=csv_data,
+                                       file_name=fname_csv, mime="text/csv")
 
     # ═══════════════════════════════════════════════════════════
     # TAB 5 — Trial Balance
