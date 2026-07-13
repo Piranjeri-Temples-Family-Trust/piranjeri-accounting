@@ -1213,16 +1213,13 @@ def render_expense_entry(user: str):
             al_yr = int(al_fy[:4])
             al_d_from = date(al_yr, 4, 1)
             al_d_to   = min(date(al_yr+1, 3, 31), _today_al)
-            al1, al2 = st.columns(2)
-            with al1: al_from = st.date_input("From", value=al_d_from, key="al_bank_from")
-            with al2: al_to   = st.date_input("To",   value=al_d_to,   key="al_bank_to")
             if st.button("📊 Show Bank Ledger", key="al_bank_load"):
                 ob_row, ob_err = _bank_opening(al_fy)
                 if ob_err or ob_row is None:
                     st.warning(f"Opening balance not found for FY {al_fy}. Run bank_setup.sql first.")
                 else:
                     ob_sav = float(ob_row['savings_balance'])
-                    mvts   = _bank_movements(al_from, al_to)
+                    mvts   = _bank_movements(al_d_from, al_d_to)
                     bal    = ob_sav
                     rows_html = (f"<tr style='font-weight:600;background:#f0fdf4'>"
                                  f"<td style='padding:5px 8px'>{ob_row['as_at'].strftime('%d %b %Y') if ob_row.get('as_at') else '—'}</td>"
@@ -1273,16 +1270,13 @@ def render_expense_entry(user: str):
             al_yr2 = int(al_fy2[:4])
             al_d_from2 = date(al_yr2, 4, 1)
             al_d_to2   = min(date(al_yr2+1, 3, 31), _today_al2)
-            ca1, ca2 = st.columns(2)
-            with ca1: al_from2 = st.date_input("From", value=al_d_from2, key="al_cash_from")
-            with ca2: al_to2   = st.date_input("To",   value=al_d_to2,   key="al_cash_to")
             if st.button("📊 Show Cash Ledger", key="al_cash_load"):
                 ob_row2, ob_err2 = _bank_opening(al_fy2)
                 if ob_err2 or ob_row2 is None:
                     st.warning(f"Opening balance not found for FY {al_fy2}. Run bank_setup.sql first.")
                 else:
                     ob_cash = float(ob_row2['cash_balance'])
-                    cash_mvts = _cash_movements(al_from2, al_to2)
+                    cash_mvts = _cash_movements(al_d_from2, al_d_to2)
                     bal2 = ob_cash
                     rows_html = (f"<tr style='font-weight:600;background:#f0fdf4'>"
                                  f"<td style='padding:5px 8px'>01 Apr {al_yr2}</td>"
