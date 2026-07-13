@@ -320,16 +320,6 @@ def _cash_movements(date_from, date_to):
             rows += _rows(c)
     except Exception:
         pass
-    with _cursor() as c:
-        c.execute("""
-            SELECT txn_date AS dt,
-                   COALESCE(description, paid_to, 'Cash Expense') AS narration,
-                   0.00 AS credit, amount AS debit,
-                   'EXPENSE' AS src
-            FROM expense_transactions
-            WHERE payment_mode = 'CASH' AND txn_date >= %s AND txn_date <= %s
-        """, (date_from, date_to))
-        rows += _rows(c)
     # Cash advances to Manikandan
     try:
         with _cursor() as c:
