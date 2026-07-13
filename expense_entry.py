@@ -354,7 +354,8 @@ def _bank_opening(fy_str):
 def _bank_movements(date_from, date_to):
     """All bank-mode credits and debits for a period, sorted by date."""
     rows = []
-    # Credits from income_transactions (bank_amount > 0)
+    # ── CREDITS ─────────────────────────────────────────────────────────────
+    # 1. Donations/income received into bank (income_transactions)
     with _cursor() as c:
         c.execute("""
             SELECT txn_date AS dt,
@@ -366,7 +367,7 @@ def _bank_movements(date_from, date_to):
               AND txn_date >= %s AND txn_date <= %s
         """, (date_from, date_to))
         rows += _rows(c)
-    # Credits from receipts table (cheque or bank_transfer)
+    # 2. Receipts issued (cheque or bank_transfer)
     try:
         with _cursor() as c:
             c.execute("""
@@ -382,19 +383,57 @@ def _bank_movements(date_from, date_to):
             rows += _rows(c)
     except Exception:
         pass
-    # Debits from expense_transactions (cheque or bank transfer)
-    with _cursor() as c:
-        c.execute("""
-            SELECT et.txn_date AS dt,
-                   COALESCE(et.description, mh.name) AS narration,
-                   0.00 AS credit, et.amount AS debit,
-                   'EXPENSE' AS src, et.payment_mode AS mode
-            FROM expense_transactions et
-            JOIN major_heads mh ON mh.id = et.major_head_id
-            WHERE et.payment_mode IN ('CHEQUE','BANK_TRANSFER')
-              AND et.txn_date >= %s AND et.txn_date <= %s
-        """, (date_from, date_to))
-        rows += _rows(c)
+    # ── DEBITS ──────────────────────────────────────────────────────────────
+    # 3. Cheques issued to Manikandan (priest float advances, non-cash)
+    #    Dr: Manikandan A/C  |  Cr: Bank A/C
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT txn_date AS dt,
+                       'Advance to Manikandan S — Chq ' || COALESCE(cheque_no, '') AS narration,
+                       0.00 AS credit, amount AS debit,
+                       'MANI_ADV' AS src, payment_mode AS mode
+                FROM priest_float
+                WHERE txn_type = 'ADVANCE'
+                  AND payment_mode IN ('CHEQUE','BANK_TRANSFER')
+                  AND txn_date >= %s AND txn_date <= %s
+            """, (date_from, date_to))
+            rows += _rows(c)
+    except Exception:
+        pass
+    # 4. Direct vendor / payee cheque payments (bank_direct_payments table)
+    #    Dr: Expense A/C or relevant A/C  |  Cr: Bank A/C
+    #    (Migrated from BK PB — these expenses were not routed via Manikandan)
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT txn_date AS dt,
+                       payee || COALESCE(' — Chq ' || cheque_no, '') AS narration,
+                       0.00 AS credit, amount AS debit,
+                       'DIRECT' AS src, 'CHEQUE' AS mode
+                FROM bank_direct_payments
+                WHERE txn_date >= %s AND txn_date <= %s
+            """, (date_from, date_to))
+            rows += _rows(c)
+    except Exception:
+        pass
+    # 5. Bank charges and other bank-transfer expenses from expense_transactions
+    #    (payment_mode = 'BANK_TRANSFER' — e.g. SMS charges, cheque book fees)
+    try:
+        with _cursor() as c:
+            c.execute("""
+                SELECT et.txn_date AS dt,
+                       COALESCE(et.description, mh.name) AS narration,
+                       0.00 AS credit, et.amount AS debit,
+                       'EXPENSE' AS src, et.payment_mode AS mode
+                FROM expense_transactions et
+                JOIN major_heads mh ON mh.id = et.major_head_id
+                WHERE et.payment_mode IN ('CHEQUE','BANK_TRANSFER')
+                  AND et.txn_date >= %s AND et.txn_date <= %s
+            """, (date_from, date_to))
+            rows += _rows(c)
+    except Exception:
+        pass
     # Sort by date
     rows.sort(key=lambda r: r["dt"])
     return rows
