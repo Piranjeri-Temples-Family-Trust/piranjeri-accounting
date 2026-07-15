@@ -216,9 +216,7 @@ with st.sidebar:
             st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Spacer ────────────────────────────────────────────────────────────────
-    st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
-    for _ in range(8):
-        st.write("")
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
     st.divider()
 
     # ── Footer: clock + logout ─────────────────────────────────────────────────
@@ -255,6 +253,12 @@ with st.sidebar:
 page = st.session_state.page
 
 if page == "journal":
+    # Hide the legacy tab strip from expense_entry.py — sidebar nav handles navigation now
+    st.markdown("""
+    <style>
+    [data-testid="stTabs"] > div:first-child { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
     try:
         from expense_entry import render_expense_entry
         render_expense_entry(st.session_state.user)
