@@ -95,12 +95,17 @@ def render(conn):
     )
     st.divider()
 
-    # ── SQL ── income accounts 5-9 (I-01..I-05) + 37,38,39 (I-07,I-08,I-09)
-    #          expenditure accounts 13-18 (E-01..E-06) + 20,21 (E-08,E-09)
-    # Excluded: acct 10 (I-06 Renovation income), acct 19 (E-07 Renovation exp)
-    # I-07 (acct 37): Aadi Pooram donations — reclassified from I-01 via CORR-AADI-FY2526
-    # I-08 (acct 38): Interest on Savings Bank — reclassified from I-01 via CORR-BINT-FY2526
-    # I-09 (acct 39): Interest on Fixed Deposits — reclassified from I-01 via CORR-BINT-FY2526
+    # ── SQL ── income and expenditure accounts
+    # Income:
+    #   id=5  I-01 Nithya Pooja (after CORR: ₹2,88,935 — Aadi Pooram & interest removed)
+    #   id=6  I-02 Pradosham
+    #   id=7  I-03 Garuda Seva
+    #   id=8  I-04 Varushabhishekam
+    #   id=9  I-05 Panguni Uthram
+    #   id=37 I-09 Aadi Pooram donations (CORR-AADI-FY2526)
+    #   id=11 I-07 Interest — Savings Bank (CORR-BINT-FY2526)
+    #   id=12 I-08 Interest — Fixed Deposits (CORR-BINT-FY2526)
+    # Excluded: id=10 I-06 Renovation income, id=19 E-07 Renovation exp
     sql = """
         SELECT
             COALESCE(SUM(CASE WHEN account_id =  5
@@ -114,11 +119,11 @@ def render(conn):
             COALESCE(SUM(CASE WHEN account_id =  9
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i05,
             COALESCE(SUM(CASE WHEN account_id = 37
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i07,
-            COALESCE(SUM(CASE WHEN account_id = 38
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i08,
-            COALESCE(SUM(CASE WHEN account_id = 39
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i09,
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i_aadi,
+            COALESCE(SUM(CASE WHEN account_id = 11
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i_sb,
+            COALESCE(SUM(CASE WHEN account_id = 12
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i_fd,
             COALESCE(SUM(CASE WHEN account_id = 13
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS e01,
             COALESCE(SUM(CASE WHEN account_id = 14
@@ -149,12 +154,12 @@ def render(conn):
         st.error("No data returned from database.")
         return
 
-    (i01, i02, i03, i04, i05, i07, i08, i09,
+    (i01, i02, i03, i04, i05, i_aadi, i_sb, i_fd,
      e01, e02, e03, e04, e05, e06, e08, e09) = [float(x) for x in rows[0]]
 
     # ── Derived totals ─────────────────────────────────────────────────────────
-    total_donations = i01 + i07 + i02 + i03 + i04 + i05
-    total_interest  = i08 + i09
+    total_donations = i01 + i_aadi + i02 + i03 + i04 + i05
+    total_interest  = i_sb + i_fd
     total_income    = total_donations + total_interest
     festival_exp    = e01 + e02 + e03 + e04 + e05 + e06
     other_exp       = e08 + e09
@@ -207,27 +212,27 @@ def render(conn):
     ir += _section_header("Donations received for")
 
     if i01 > 0.005:
-        ir += _tr("Nithya Pooja",      inner=i01, indent=True)
-    if i07 > 0.005:
-        ir += _tr("Aadi Pooram",       inner=i07, indent=True)
+        ir += _tr("Nithya Pooja",      inner=i01,    indent=True)
+    if i_aadi > 0.005:
+        ir += _tr("Aadi Pooram",       inner=i_aadi, indent=True)
     if i02 > 0.005:
-        ir += _tr("Pradosham",         inner=i02, indent=True)
+        ir += _tr("Pradosham",         inner=i02,    indent=True)
     if i03 > 0.005:
-        ir += _tr("Garuda Seva",       inner=i03, indent=True)
+        ir += _tr("Garuda Seva",       inner=i03,    indent=True)
     if i04 > 0.005:
-        ir += _tr("Varushabhishekam",  inner=i04, indent=True)
+        ir += _tr("Varushabhishekam",  inner=i04,    indent=True)
     if i05 > 0.005:
-        ir += _tr("Panguni Uthram",    inner=i05, indent=True)
+        ir += _tr("Panguni Uthram",    inner=i05,    indent=True)
 
     ir += _tr("Sub-total", outer=total_donations, top_line=True, bold=True)
     ir += _spacer()
 
     # Interest income section (matches audited FY 2024-25 format)
-    if i08 > 0.005 or i09 > 0.005:
-        if i08 > 0.005:
-            ir += _tr("Interest on Savings Bank",    outer=i08)
-        if i09 > 0.005:
-            ir += _tr("Interest on Fixed Deposits",  outer=i09)
+    if i_sb > 0.005 or i_fd > 0.005:
+        if i_sb > 0.005:
+            ir += _tr("Interest on Savings Bank",    outer=i_sb)
+        if i_fd > 0.005:
+            ir += _tr("Interest on Fixed Deposits",  outer=i_fd)
         ir += _spacer()
 
     # Balancing figure on income side when expenditure exceeds income
@@ -263,14 +268,14 @@ def render(conn):
     # ── Download CSV ───────────────────────────────────────────────────────────
     csv_rows = [
         ("Nithya Pooja Donations",         i01,             "Income"),
-        ("Aadi Pooram Donations",          i07,             "Income"),
+        ("Aadi Pooram Donations",          i_aadi,          "Income"),
         ("Pradosham Donations",            i02,             "Income"),
         ("Garuda Seva Donations",          i03,             "Income"),
         ("Varushabhishekam Donations",     i04,             "Income"),
         ("Panguni Uthram Donations",       i05,             "Income"),
         ("Festival Donations Sub-total",   total_donations, "Income"),
-        ("Interest on Savings Bank",       i08,             "Income"),
-        ("Interest on Fixed Deposits",     i09,             "Income"),
+        ("Interest on Savings Bank",       i_sb,            "Income"),
+        ("Interest on Fixed Deposits",     i_fd,            "Income"),
         ("Total Income",                   total_income,    "Income"),
         ("Nithya Pooja Expenditure",       e01,          "Expenditure"),
         ("Aadi Pooram Expenditure",        e04,          "Expenditure"),
