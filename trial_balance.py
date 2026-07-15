@@ -21,14 +21,14 @@ def render(conn):
             a.id          AS account_id,
             a.code        AS code,
             a.name        AS name,
-            a.type        AS account_type,
+            a.account_type,
             COALESCE(SUM(le.debit_amount),  0) AS total_dr,
             COALESCE(SUM(le.credit_amount), 0) AS total_cr
         FROM accounts a
         LEFT JOIN ledger_entries le
                ON le.account_id = a.id
               AND le.fy = :fy
-        GROUP BY a.id, a.code, a.name, a.type
+        GROUP BY a.id, a.code, a.name, a.account_type
         ORDER BY a.id
     """
 
