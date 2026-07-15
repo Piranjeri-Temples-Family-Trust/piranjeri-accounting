@@ -7,14 +7,16 @@ Usage: call render(conn) from the main app.py tab.
 
 import streamlit as st
 import pandas as pd
+from ptft_utils import date_fy_selector
 
 
 def render(conn):
     """Render the Trial Balance tab."""
 
-    st.header("Trial Balance — FY 2025-26")
+    st.header("Trial Balance")
 
-    fy = "2025-26"
+    date_from, date_to, fy = date_fy_selector("tb")
+    st.divider()
 
     sql = """
         SELECT
@@ -28,6 +30,7 @@ def render(conn):
         LEFT JOIN ledger_entries le
                ON le.account_id = a.id
               AND le.fy = :fy
+        WHERE a.id NOT IN (22, 23, 24, 26)   -- exclude E-10,E-11,E-12,E-14 (zero activity; mapped by trustees)
         GROUP BY a.id, a.code, a.name, a.account_type
         ORDER BY a.id
     """

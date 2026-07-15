@@ -194,18 +194,13 @@ with st.sidebar:
 
     with col_right:
         st.markdown(f"""
-        <div style='text-align:right; line-height:1.25; padding-top:3px;
-                    background:#1a1a2e; border-radius:6px; padding:6px 8px;'>
-            <div style='font-size:1.15rem; font-weight:700; font-family:Segoe UI,monospace;
-                        letter-spacing:1px; color:#e8e8e8;'>
-                {now.strftime('%H:%M')}
-            </div>
-            <div style='font-size:0.68rem; color:#aaa; margin-top:1px;'>
-                {now.strftime('%d/%m/%Y')}
-            </div>
-            <div style='font-size:0.68rem; color:#7c8cf8; margin-top:2px;'>
-                {st.session_state.user}
-            </div>
+        <div style='text-align:right; line-height:1.3;
+                    border-radius:5px; padding:4px 7px;
+                    background:rgba(99,102,241,0.12); border:1px solid rgba(99,102,241,0.25)'>
+            <div style='font-size:1rem; font-weight:700; font-family:Segoe UI,monospace;
+                        letter-spacing:2px; color:#e2e2e2; margin:0'>{now.strftime('%H:%M')}</div>
+            <div style='font-size:0.62rem; color:#999; margin:0'>{now.strftime('%d/%m/%Y')}</div>
+            <div style='font-size:0.62rem; color:#818cf8; margin:0'>{st.session_state.user}</div>
         </div>
         """, unsafe_allow_html=True)
 
