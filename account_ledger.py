@@ -8,14 +8,13 @@ Usage: call render(conn) from the main app.py tab.
 import streamlit as st
 import pandas as pd
 from datetime import date
+from ptft_utils import date_fy_selector, fy_from_date
 
 
 def render(conn):
     """Render the Account Ledger tab."""
 
-    st.header("Account Ledger — FY 2025-26")
-
-    fy = "2025-26"
+    st.header("Account Ledger")
 
     # ── Load accounts list ──────────────────────────────────────────────────
     try:
@@ -34,24 +33,8 @@ def render(conn):
     account_options = {label: aid for aid, label in account_rows}
 
     # ── Filters ─────────────────────────────────────────────────────────────
-    col1, col2, col3 = st.columns([3, 2, 2])
-
-    with col1:
-        selected_label = st.selectbox("Account", list(account_options.keys()))
-    with col2:
-        date_from = st.date_input(
-            "From",
-            value=date(2025, 4, 1),
-            min_value=date(2025, 4, 1),
-            max_value=date(2026, 3, 31),
-        )
-    with col3:
-        date_to = st.date_input(
-            "To",
-            value=date(2026, 3, 31),
-            min_value=date(2025, 4, 1),
-            max_value=date(2026, 3, 31),
-        )
+    selected_label = st.selectbox("Account", list(account_options.keys()))
+    date_from, date_to, fy = date_fy_selector("al")
 
     if date_from > date_to:
         st.error("'From' date must be on or before 'To' date.")

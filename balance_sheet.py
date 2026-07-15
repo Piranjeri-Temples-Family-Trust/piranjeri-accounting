@@ -5,14 +5,14 @@ Piranjeri Temples Family Trust
 
 import streamlit as st
 import pandas as pd
+from ptft_utils import date_fy_selector
 
 
 def render(conn):
     st.header("Balance Sheet")
-    st.subheader("Piranjeri Temples Family Trust — As at 31 March 2026")
+    date_from, date_to, fy = date_fy_selector("bs")
+    st.subheader(f"Piranjeri Temples Family Trust — As at {date_to.strftime('%d %b %Y')}")
     st.divider()
-
-    fy = "2025-26"
 
     sql = """
         SELECT a.id, a.code, a.name, a.account_type,

@@ -7,23 +7,18 @@ Shows every transaction with its Dr and Cr legs and narration.
 import streamlit as st
 import pandas as pd
 from datetime import date
+from ptft_utils import date_fy_selector
 
 
 def render(conn):
-    st.header("📖 Journal Book — FY 2025-26")
+    st.header("📖 Journal Book")
     st.caption("All accounting entries — both debit and credit legs of each transaction.")
+
+    date_from, date_to, fy = date_fy_selector("jb")
     st.divider()
 
-    fy = "2025-26"
-
-    # ── Filters ───────────────────────────────────────────────────────────────
-    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
-    with col1:
-        date_from = st.date_input("From", value=date(2025, 4, 1),
-                                  min_value=date(2025, 4, 1), max_value=date(2026, 3, 31))
-    with col2:
-        date_to = st.date_input("To", value=date(2026, 3, 31),
-                                min_value=date(2025, 4, 1), max_value=date(2026, 3, 31))
+    # ── Additional filters ────────────────────────────────────────────────────
+    col3, col4 = st.columns([2, 2])
     with col3:
         # Batch filter
         try:

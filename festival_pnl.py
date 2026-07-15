@@ -5,6 +5,7 @@ Piranjeri Temples Family Trust — FY 2025-26
 
 import streamlit as st
 import pandas as pd
+from ptft_utils import date_fy_selector
 
 
 # Fund → (income account_id, expense account_id, display name)
@@ -33,10 +34,9 @@ def _fetch(conn, account_id, fy):
 
 def render(conn):
     st.header("Festival P&L Drill-down")
-    st.subheader("Piranjeri Temples Family Trust — FY 2025-26")
+    date_from, date_to, fy = date_fy_selector("fpnl")
+    st.subheader(f"Piranjeri Temples Family Trust — FY {fy}")
     st.divider()
-
-    fy = "2025-26"
 
     summary_rows = []
 
