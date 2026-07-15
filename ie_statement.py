@@ -9,8 +9,10 @@ Key rules (from audited FY 2024-25):
   • Renovation income (I-06, acct 10) and Renovation expenditure (E-07, acct 19)
     are EXCLUDED — they appear in the Renovation Fund on the Balance Sheet.
   • Aadi Pooram expenditure (E-04, acct 16) IS shown separately on the left side.
-  • Aadi Pooram donations are included under Nithya Pooja (I-01) — collected
-    under the NPK fund; no separate income account exists.
+  • Aadi Pooram donations (I-09, acct 39) are shown separately on the income side —
+    reclassified from I-01 via CORR-AADI-FY2526 journal entries.
+  • Bank interest (I-07=SB acct 11, I-08=FD acct 12) reclassified from I-01
+    via CORR-BINT-FY2526 journal entries.
   • "Excess of Income over Expenditure" / "Excess of Expenditure over Income"
     appears as a balancing figure on the SHORT side (left if surplus, right if deficit).
   • Both columns total to the same Grand Total.
@@ -102,7 +104,7 @@ def render(conn):
     #   id=7  I-03 Garuda Seva
     #   id=8  I-04 Varushabhishekam
     #   id=9  I-05 Panguni Uthram
-    #   id=37 I-09 Aadi Pooram donations (CORR-AADI-FY2526)
+    #   id=39 I-09 Aadi Pooram donations (CORR-AADI-FY2526)
     #   id=11 I-07 Interest — Savings Bank (CORR-BINT-FY2526)
     #   id=12 I-08 Interest — Fixed Deposits (CORR-BINT-FY2526)
     # Excluded: id=10 I-06 Renovation income, id=19 E-07 Renovation exp
@@ -118,7 +120,7 @@ def render(conn):
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i04,
             COALESCE(SUM(CASE WHEN account_id =  9
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i05,
-            COALESCE(SUM(CASE WHEN account_id = 37
+            COALESCE(SUM(CASE WHEN account_id = 39
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i_aadi,
             COALESCE(SUM(CASE WHEN account_id = 11
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i_sb,
