@@ -1,6 +1,19 @@
 """
-ie_statement.py — Income & Expenditure Statement for FY 2025-26
+ie_statement.py — Income & Expenditure Account for FY 2025-26
 Piranjeri Temples Family Trust
+
+Format: T-account — Expenditure on LEFT | Income on RIGHT
+        Matching audited FY 2024-25 presentation.
+
+Key rules (from audited FY 2024-25):
+  • Renovation income (I-06, acct 10) and Renovation expenditure (E-07, acct 19)
+    are EXCLUDED — they appear in the Renovation Fund on the Balance Sheet.
+  • Aadi Pooram expenditure (E-04, acct 16) IS shown separately on the left side.
+  • Aadi Pooram donations are included under Nithya Pooja (I-01) — collected
+    under the NPK fund; no separate income account exists.
+  • "Excess of Income over Expenditure" / "Excess of Expenditure over Income"
+    appears as a balancing figure on the SHORT side (left if surplus, right if deficit).
+  • Both columns total to the same Grand Total.
 """
 
 import streamlit as st
@@ -8,156 +21,248 @@ import pandas as pd
 from ptft_utils import date_fy_selector
 
 
+# ── Formatting helpers ─────────────────────────────────────────────────────────
+
+def _f(amt):
+    """₹1,23,456.78 for positives; (₹1,23,456.78) for negatives; ₹ — for zero."""
+    if amt is None:
+        return ""
+    if abs(amt) < 0.005:
+        return "₹ —"
+    if amt < 0:
+        return f"(₹{abs(amt):,.2f})"
+    return f"₹{amt:,.2f}"
+
+
+def _tr(label, inner=None, outer=None, bold=False, indent=False, top_line=False):
+    bw  = "font-weight:600;" if bold else ""
+    lp  = "padding-left:20px;" if indent else ""
+    bdr = "border-top:1px solid #bbb;" if top_line else ""
+
+    def _cell(v):
+        if v is None:
+            return "<td></td>"
+        color = "color:#c00;" if v < 0 else ""
+        return (f"<td style='text-align:right;font-family:monospace;"
+                f"padding:2px 6px;white-space:nowrap;{color}'>{_f(v)}</td>")
+
+    return (
+        f"<tr style='{bw}{bdr}'>"
+        f"<td style='padding:2px 8px;{lp}'>{label}</td>"
+        + _cell(inner) + _cell(outer) +
+        f"</tr>"
+    )
+
+
+def _spacer():
+    return "<tr><td colspan='3' style='height:8px'></td></tr>"
+
+
+def _section_header(title):
+    return (
+        f"<tr><td colspan='3' style='padding:4px 8px;font-weight:600;"
+        f"font-style:italic;color:#555;font-size:0.82rem'>{title}</td></tr>"
+    )
+
+
+def _grand_total(label, total):
+    return (
+        f"<tr style='font-weight:700;border-top:2px solid #444;"
+        f"border-bottom:2px solid #444;'>"
+        f"<td style='padding:5px 8px;'>{label}</td><td></td>"
+        f"<td style='text-align:right;font-family:monospace;"
+        f"padding:5px 8px;white-space:nowrap;'>{_f(total)}</td>"
+        f"</tr>"
+    )
+
+
+def _wrap(rows_html):
+    return (
+        "<table style='width:100%;border-collapse:collapse;font-size:0.87rem;'>"
+        + rows_html + "</table>"
+    )
+
+
+# ── Main render ────────────────────────────────────────────────────────────────
+
 def render(conn):
-    st.header("Income & Expenditure Statement")
+    st.header("Income & Expenditure Account")
     date_from, date_to, fy = date_fy_selector("ie")
-    st.subheader(f"Piranjeri Temples Family Trust — FY {fy} ({date_from.strftime('%d %b %Y')} – {date_to.strftime('%d %b %Y')})")
+    st.subheader(
+        f"Piranjeri Temples Family Trust — "
+        f"Income and Expenditure Account for the year ended "
+        f"{date_to.strftime('%d %B %Y')}"
+    )
     st.divider()
 
+    # ── SQL ── accounts 5-9 (I-01..I-05) and 13-18, 20, 21 (E-01..E-06, E-08, E-09)
+    # Renovation (acct 10 = I-06, acct 19 = E-07) deliberately excluded.
     sql = """
-        SELECT a.id, a.code, a.name, a.account_type,
-               COALESCE(SUM(le.debit_amount),  0) AS total_dr,
-               COALESCE(SUM(le.credit_amount), 0) AS total_cr
-        FROM accounts a
-        LEFT JOIN ledger_entries le
-               ON le.account_id = a.id AND le.fy = :fy
-        WHERE a.account_type IN ('INCOME', 'EXPENDITURE')
-          AND a.id NOT IN (22, 23, 24, 25, 26, 27, 28, 29, 30)   -- exclude zero-activity accounts E-10 to E-18
-        GROUP BY a.id, a.code, a.name, a.account_type
-        ORDER BY a.account_type DESC, a.id
+        SELECT
+            COALESCE(SUM(CASE WHEN account_id =  5
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i01,
+            COALESCE(SUM(CASE WHEN account_id =  6
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i02,
+            COALESCE(SUM(CASE WHEN account_id =  7
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i03,
+            COALESCE(SUM(CASE WHEN account_id =  8
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i04,
+            COALESCE(SUM(CASE WHEN account_id =  9
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i05,
+            COALESCE(SUM(CASE WHEN account_id = 13
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e01,
+            COALESCE(SUM(CASE WHEN account_id = 14
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e02,
+            COALESCE(SUM(CASE WHEN account_id = 15
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e03,
+            COALESCE(SUM(CASE WHEN account_id = 16
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e04,
+            COALESCE(SUM(CASE WHEN account_id = 17
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e05,
+            COALESCE(SUM(CASE WHEN account_id = 18
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e06,
+            COALESCE(SUM(CASE WHEN account_id = 20
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e08,
+            COALESCE(SUM(CASE WHEN account_id = 21
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e09
+        FROM ledger_entries
+        WHERE fy = :fy
     """
 
     try:
         rows = conn.run(sql, fy=fy)
-        cols = [c["name"] for c in conn.columns]
     except Exception as e:
         st.error(f"Database error: {e}")
         return
 
-    df = pd.DataFrame(rows, columns=cols)
-    df["total_dr"] = df["total_dr"].astype(float)
-    df["total_cr"] = df["total_cr"].astype(float)
-    df["net"] = df["total_dr"] - df["total_cr"]
+    if not rows:
+        st.error("No data returned from database.")
+        return
 
-    income_df = df[df["account_type"] == "INCOME"].copy()
-    exp_df    = df[df["account_type"] == "EXPENDITURE"].copy()
+    (i01, i02, i03, i04, i05,
+     e01, e02, e03, e04, e05, e06, e08, e09) = [float(x) for x in rows[0]]
 
-    # Income: net is negative (CR > DR) → display as positive
-    income_df["amount"] = (income_df["total_cr"] - income_df["total_dr"]).abs()
-    # Expenditure: net is positive (DR > CR)
-    exp_df["amount"] = (exp_df["total_dr"] - exp_df["total_cr"]).abs()
+    # ── Derived totals ─────────────────────────────────────────────────────────
+    total_income = i01 + i02 + i03 + i04 + i05
+    festival_exp = e01 + e02 + e03 + e04 + e05 + e06
+    other_exp    = e08 + e09
+    total_exp    = festival_exp + other_exp
+    ie_result    = total_income - total_exp           # +ve = surplus, -ve = deficit
+    grand_total  = max(total_income, total_exp)
 
-    total_income = income_df["amount"].sum()
-    total_exp    = exp_df["amount"].sum()
-    surplus      = total_income - total_exp
+    surplus_label  = ("Excess of Income over Expenditure"
+                      if ie_result >= 0
+                      else "Excess of Expenditure over Income")
+    balancing_amt  = abs(ie_result)
 
+    # ── EXPENDITURE table (LEFT) ───────────────────────────────────────────────
+    el = ""
+    el += _section_header("Expenditure towards")
+
+    if e01 > 0.005:
+        el += _tr("Nithya Pooja",       inner=e01, indent=True)
+    if e04 > 0.005:
+        el += _tr("Aadi Pooram",        inner=e04, indent=True)
+    if e02 > 0.005:
+        el += _tr("Pradosham",          inner=e02, indent=True)
+    if e05 > 0.005:
+        el += _tr("Garuda Seva",        inner=e05, indent=True)
+    if e06 > 0.005:
+        el += _tr("Varushabhishekam",   inner=e06, indent=True)
+    if e03 > 0.005:
+        el += _tr("Panguni Uthram",     inner=e03, indent=True)
+
+    el += _tr("Sub-total", outer=festival_exp, top_line=True, bold=True)
+    el += _spacer()
+
+    el += _section_header("Other Expenses")
+    if e08 > 0.005:
+        el += _tr("Bank Charges",  inner=e08, indent=True)
+    if e09 > 0.005:
+        el += _tr("Audit Fees",    inner=e09, indent=True)
+    el += _tr("Sub-total", outer=other_exp, top_line=True, bold=True)
+    el += _spacer()
+
+    # Balancing figure on expenditure side when income exceeds expenditure
+    if ie_result >= 0:
+        el += _tr(surplus_label, outer=balancing_amt, bold=True)
+        el += _spacer()
+
+    el += _grand_total("Total", grand_total)
+
+    # ── INCOME table (RIGHT) ───────────────────────────────────────────────────
+    ir = ""
+    ir += _section_header("Donations received for")
+
+    if i01 > 0.005:
+        ir += _tr("Nithya Pooja",      inner=i01, indent=True)
+    if i02 > 0.005:
+        ir += _tr("Pradosham",         inner=i02, indent=True)
+    if i03 > 0.005:
+        ir += _tr("Garuda Seva",       inner=i03, indent=True)
+    if i04 > 0.005:
+        ir += _tr("Varushabhishekam",  inner=i04, indent=True)
+    if i05 > 0.005:
+        ir += _tr("Panguni Uthram",    inner=i05, indent=True)
+
+    ir += _tr("Sub-total", outer=total_income, top_line=True, bold=True)
+    ir += _spacer()
+
+    # Balancing figure on income side when expenditure exceeds income
+    if ie_result < 0:
+        ir += _tr(surplus_label, outer=balancing_amt, bold=True)
+        ir += _spacer()
+
+    ir += _grand_total("Total", grand_total)
+
+    # ── Render T-account ───────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
-
-    # ── INCOME column ─────────────────────────────────────────────────────────
     with col1:
-        st.markdown("""
-        <div style='background:rgba(34,197,94,0.07); border-radius:10px;
-                    padding:16px; border:1px solid rgba(34,197,94,0.2);'>
-        """, unsafe_allow_html=True)
-        st.markdown("### 📥 Income")
-        for _, row in income_df.iterrows():
-            if row["amount"] > 0:
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
-                    f"border-bottom:1px solid rgba(34,197,94,0.1)'>"
-                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-            f"border-top:2px solid rgba(34,197,94,0.4);padding-top:8px;margin-top:4px'>"
-            f"<span>Total Income</span>"
-            f"<span style='font-family:monospace'>₹{total_income:,.2f}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        if surplus >= 0:
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#16a34a'>"
-                f"<span><b>Surplus</b></span>"
-                f"<span style='font-family:monospace'><b>₹{surplus:,.2f}</b></span>"
-                f"</div>"
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #16a34a;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── EXPENDITURE column ────────────────────────────────────────────────────
+        st.markdown("#### Expenditure")
+        st.markdown(_wrap(el), unsafe_allow_html=True)
     with col2:
-        st.markdown("""
-        <div style='background:rgba(239,68,68,0.07); border-radius:10px;
-                    padding:16px; border:1px solid rgba(239,68,68,0.2);'>
-        """, unsafe_allow_html=True)
-        st.markdown("### 📤 Expenditure")
-        for _, row in exp_df.iterrows():
-            if row["amount"] > 0:
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
-                    f"border-bottom:1px solid rgba(239,68,68,0.1)'>"
-                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-            f"border-top:2px solid rgba(239,68,68,0.4);padding-top:8px;margin-top:4px'>"
-            f"<span>Total Expenditure</span>"
-            f"<span style='font-family:monospace'>₹{total_exp:,.2f}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        if surplus < 0:
-            deficit = abs(surplus)
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#dc2626'>"
-                f"<span><b>Deficit</b></span>"
-                f"<span style='font-family:monospace'><b>₹{deficit:,.2f}</b></span>"
-                f"</div>"
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #dc2626;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_income + deficit:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("#### Income")
+        st.markdown(_wrap(ir), unsafe_allow_html=True)
 
     st.divider()
-    if surplus >= 0:
-        st.success(f"✅ Surplus for FY 2025-26: ₹{surplus:,.2f}")
-    else:
-        st.error(f"⚠️ Deficit for FY 2025-26: ₹{abs(surplus):,.2f}")
 
-    # Download
-    out = pd.concat([
-        income_df[["code", "name", "amount"]].assign(type="Income"),
-        exp_df[["code", "name", "amount"]].assign(type="Expenditure"),
-    ])
-    csv = out.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download I&E Statement (CSV)", csv,
-                       "ie_statement_FY2526.csv", "text/csv")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Income",      f"₹{total_income:,.2f}")
+    m2.metric("Total Expenditure", f"₹{total_exp:,.2f}")
+    m3.metric(surplus_label[:35],  f"₹{balancing_amt:,.2f}")
+
+    st.info(
+        "ℹ️  **Notes:** "
+        "Aadi Pooram donations are included under Nithya Pooja (I-01) — "
+        "collected under the NPK fund. "
+        "Renovation Fund income & expenditure are excluded from this statement — "
+        "they are reflected in the Renovation Fund balance on the Balance Sheet."
+    )
+
+    # ── Download CSV ───────────────────────────────────────────────────────────
+    csv_rows = [
+        ("Nithya Pooja Donations",         i01,          "Income"),
+        ("Pradosham Donations",            i02,          "Income"),
+        ("Garuda Seva Donations",          i03,          "Income"),
+        ("Varushabhishekam Donations",     i04,          "Income"),
+        ("Panguni Uthram Donations",       i05,          "Income"),
+        ("Total Income",                   total_income, "Income"),
+        ("Nithya Pooja Expenditure",       e01,          "Expenditure"),
+        ("Aadi Pooram Expenditure",        e04,          "Expenditure"),
+        ("Pradosham Expenditure",          e02,          "Expenditure"),
+        ("Garuda Seva Expenditure",        e05,          "Expenditure"),
+        ("Varushabhishekam Expenditure",   e06,          "Expenditure"),
+        ("Panguni Uthram Expenditure",     e03,          "Expenditure"),
+        ("Festival Expenditure Sub-total", festival_exp, "Expenditure"),
+        ("Bank Charges",                   e08,          "Other Expenses"),
+        ("Audit Fees",                     e09,          "Other Expenses"),
+        ("Other Expenses Sub-total",       other_exp,    "Other Expenses"),
+        ("Total Expenditure",              total_exp,    "Expenditure"),
+        (surplus_label,                    ie_result,    "Result"),
+    ]
+    csv = (pd.DataFrame(csv_rows, columns=["Description", "Amount (₹)", "Category"])
+             .to_csv(index=False).encode("utf-8"))
+    st.download_button(
+        "⬇ Download I&E Statement (CSV)", csv,
+        f"ie_statement_{fy.replace('-', '')}.csv", "text/csv"
+    )
