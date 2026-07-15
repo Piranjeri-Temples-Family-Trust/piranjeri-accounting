@@ -95,8 +95,12 @@ def render(conn):
     )
     st.divider()
 
-    # ── SQL ── accounts 5-9 (I-01..I-05) and 13-18, 20, 21 (E-01..E-06, E-08, E-09)
-    # Renovation (acct 10 = I-06, acct 19 = E-07) deliberately excluded.
+    # ── SQL ── income accounts 5-9 (I-01..I-05) + 37,38,39 (I-07,I-08,I-09)
+    #          expenditure accounts 13-18 (E-01..E-06) + 20,21 (E-08,E-09)
+    # Excluded: acct 10 (I-06 Renovation income), acct 19 (E-07 Renovation exp)
+    # I-07 (acct 37): Aadi Pooram donations — reclassified from I-01 via CORR-AADI-FY2526
+    # I-08 (acct 38): Interest on Savings Bank — reclassified from I-01 via CORR-BINT-FY2526
+    # I-09 (acct 39): Interest on Fixed Deposits — reclassified from I-01 via CORR-BINT-FY2526
     sql = """
         SELECT
             COALESCE(SUM(CASE WHEN account_id =  5
@@ -109,6 +113,12 @@ def render(conn):
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i04,
             COALESCE(SUM(CASE WHEN account_id =  9
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i05,
+            COALESCE(SUM(CASE WHEN account_id = 37
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i07,
+            COALESCE(SUM(CASE WHEN account_id = 38
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i08,
+            COALESCE(SUM(CASE WHEN account_id = 39
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i09,
             COALESCE(SUM(CASE WHEN account_id = 13
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS e01,
             COALESCE(SUM(CASE WHEN account_id = 14
@@ -139,16 +149,18 @@ def render(conn):
         st.error("No data returned from database.")
         return
 
-    (i01, i02, i03, i04, i05,
+    (i01, i02, i03, i04, i05, i07, i08, i09,
      e01, e02, e03, e04, e05, e06, e08, e09) = [float(x) for x in rows[0]]
 
     # ── Derived totals ─────────────────────────────────────────────────────────
-    total_income = i01 + i02 + i03 + i04 + i05
-    festival_exp = e01 + e02 + e03 + e04 + e05 + e06
-    other_exp    = e08 + e09
-    total_exp    = festival_exp + other_exp
-    ie_result    = total_income - total_exp           # +ve = surplus, -ve = deficit
-    grand_total  = max(total_income, total_exp)
+    total_donations = i01 + i07 + i02 + i03 + i04 + i05
+    total_interest  = i08 + i09
+    total_income    = total_donations + total_interest
+    festival_exp    = e01 + e02 + e03 + e04 + e05 + e06
+    other_exp       = e08 + e09
+    total_exp       = festival_exp + other_exp
+    ie_result       = total_income - total_exp        # +ve = surplus, -ve = deficit
+    grand_total     = max(total_income, total_exp)
 
     surplus_label  = ("Excess of Income over Expenditure"
                       if ie_result >= 0
@@ -196,6 +208,8 @@ def render(conn):
 
     if i01 > 0.005:
         ir += _tr("Nithya Pooja",      inner=i01, indent=True)
+    if i07 > 0.005:
+        ir += _tr("Aadi Pooram",       inner=i07, indent=True)
     if i02 > 0.005:
         ir += _tr("Pradosham",         inner=i02, indent=True)
     if i03 > 0.005:
@@ -205,8 +219,16 @@ def render(conn):
     if i05 > 0.005:
         ir += _tr("Panguni Uthram",    inner=i05, indent=True)
 
-    ir += _tr("Sub-total", outer=total_income, top_line=True, bold=True)
+    ir += _tr("Sub-total", outer=total_donations, top_line=True, bold=True)
     ir += _spacer()
+
+    # Interest income section (matches audited FY 2024-25 format)
+    if i08 > 0.005 or i09 > 0.005:
+        if i08 > 0.005:
+            ir += _tr("Interest on Savings Bank",    outer=i08)
+        if i09 > 0.005:
+            ir += _tr("Interest on Fixed Deposits",  outer=i09)
+        ir += _spacer()
 
     # Balancing figure on income side when expenditure exceeds income
     if ie_result < 0:
@@ -233,20 +255,23 @@ def render(conn):
 
     st.info(
         "ℹ️  **Notes:** "
-        "Aadi Pooram donations are included under Nithya Pooja (I-01) — "
-        "collected under the NPK fund. "
-        "Renovation Fund income & expenditure are excluded from this statement — "
-        "they are reflected in the Renovation Fund balance on the Balance Sheet."
+        "Renovation Fund income & expenditure are excluded — "
+        "they are shown in the Renovation Fund balance on the Balance Sheet.  "
+        "Bank interest (SB + FD) is shown separately as Interest Income."
     )
 
     # ── Download CSV ───────────────────────────────────────────────────────────
     csv_rows = [
-        ("Nithya Pooja Donations",         i01,          "Income"),
-        ("Pradosham Donations",            i02,          "Income"),
-        ("Garuda Seva Donations",          i03,          "Income"),
-        ("Varushabhishekam Donations",     i04,          "Income"),
-        ("Panguni Uthram Donations",       i05,          "Income"),
-        ("Total Income",                   total_income, "Income"),
+        ("Nithya Pooja Donations",         i01,             "Income"),
+        ("Aadi Pooram Donations",          i07,             "Income"),
+        ("Pradosham Donations",            i02,             "Income"),
+        ("Garuda Seva Donations",          i03,             "Income"),
+        ("Varushabhishekam Donations",     i04,             "Income"),
+        ("Panguni Uthram Donations",       i05,             "Income"),
+        ("Festival Donations Sub-total",   total_donations, "Income"),
+        ("Interest on Savings Bank",       i08,             "Income"),
+        ("Interest on Fixed Deposits",     i09,             "Income"),
+        ("Total Income",                   total_income,    "Income"),
         ("Nithya Pooja Expenditure",       e01,          "Expenditure"),
         ("Aadi Pooram Expenditure",        e04,          "Expenditure"),
         ("Pradosham Expenditure",          e02,          "Expenditure"),
