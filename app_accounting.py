@@ -50,6 +50,48 @@ div[data-testid="stSidebar"] .logout-btn button {
     background: rgba(99,102,241,0.25) !important;
     border-left: 3px solid #6366f1 !important;
 }
+
+/* ── Section / card backgrounds ───────────────────────────────────────── */
+
+/* Metric cards — light indigo tint */
+div[data-testid="metric-container"] {
+    background: rgba(99, 102, 241, 0.09) !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(99, 102, 241, 0.18) !important;
+    padding: 12px 16px !important;
+}
+
+/* Expandable sections (Festival P&L, etc.) */
+div[data-testid="stExpander"] details {
+    background: rgba(99, 102, 241, 0.05) !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(99, 102, 241, 0.12) !important;
+}
+div[data-testid="stExpander"] details summary {
+    border-radius: 10px !important;
+}
+
+/* Subheader section title - subtle highlight strip */
+div[data-testid="stHeadingWithActionElements"] h3 {
+    background: rgba(99, 102, 241, 0.07);
+    border-radius: 7px;
+    padding: 6px 12px !important;
+    border-left: 3px solid rgba(99, 102, 241, 0.5);
+    margin-bottom: 6px;
+}
+
+/* Dataframe containers — slight card feel */
+div[data-testid="stDataFrame"] {
+    background: rgba(99, 102, 241, 0.03) !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(99, 102, 241, 0.08) !important;
+    padding: 4px !important;
+}
+
+/* Success / error boxes */
+div[data-testid="stAlert"] {
+    border-radius: 10px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -179,32 +221,34 @@ with st.sidebar:
         st.write("")
     st.divider()
 
-    # ── Footer: logout left, clock+user right ─────────────────────────────────
+    # ── Footer: clock + logout ─────────────────────────────────────────────────
     now = datetime.now()
-    col_left, col_right = st.columns([1, 1.4])
 
-    with col_left:
-        st.markdown("<div class='logout-btn'>", unsafe_allow_html=True)
-        if st.button("⏻ Logout", key="logout_btn"):
-            st.session_state.logged_in = False
-            st.session_state.user = None
-            st.session_state.last_active = None
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown(f"""
-        <div style='text-align:right; line-height:1.3;
-                    border-radius:5px; padding:4px 7px;
-                    background:rgba(99,102,241,0.12); border:1px solid rgba(99,102,241,0.25)'>
-            <div style='font-size:1rem; font-weight:700; font-family:Segoe UI,monospace;
-                        letter-spacing:2px; color:#e2e2e2; margin:0'>{now.strftime('%H:%M')}</div>
-            <div style='font-size:0.62rem; color:#999; margin:0'>{now.strftime('%d/%m/%Y')}</div>
-            <div style='font-size:0.62rem; color:#818cf8; margin:0'>{st.session_state.user}</div>
+    # Clock widget — right-aligned, Windows tray style, compact
+    st.markdown(f"""
+    <div style='display:flex; justify-content:flex-end; margin-bottom:6px;'>
+        <div style='text-align:right; line-height:1.25;
+                    border-radius:6px; padding:4px 9px;
+                    background:rgba(99,102,241,0.22);
+                    border:1px solid rgba(99,102,241,0.45);'>
+            <div style='font-size:0.85rem; font-weight:700; font-family:monospace;
+                        letter-spacing:2px; color:#c7d2fe; margin:0;'>{now.strftime('%H:%M')}</div>
+            <div style='font-size:0.57rem; color:#94a3b8; margin:0;'>{now.strftime('%d/%m/%Y')}</div>
+            <div style='font-size:0.57rem; color:#a5b4fc; margin:0;'>{st.session_state.user}</div>
         </div>
-        """, unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown(f"<p style='font-size:0.65rem;color:#555;text-align:center;margin-top:4px'>FY 2025-26</p>",
+    # Logout button — small, left side
+    st.markdown("<div class='logout-btn'>", unsafe_allow_html=True)
+    if st.button("⏻ Logout", key="logout_btn"):
+        st.session_state.logged_in = False
+        st.session_state.user = None
+        st.session_state.last_active = None
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<p style='font-size:0.62rem;color:#444;text-align:center;margin-top:4px'>FY 2025-26</p>",
                 unsafe_allow_html=True)
 
 # ── Main content routing ──────────────────────────────────────────────────────

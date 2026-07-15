@@ -72,6 +72,20 @@ def render(conn):
         "FUND":        "Funds",
         "LIABILITY":   "Liabilities",
     }
+    group_colors = {
+        "ASSET":       "rgba(99,102,241,0.06)",
+        "INCOME":      "rgba(34,197,94,0.07)",
+        "EXPENDITURE": "rgba(239,68,68,0.06)",
+        "FUND":        "rgba(234,179,8,0.06)",
+        "LIABILITY":   "rgba(168,85,247,0.06)",
+    }
+    group_border = {
+        "ASSET":       "rgba(99,102,241,0.2)",
+        "INCOME":      "rgba(34,197,94,0.25)",
+        "EXPENDITURE": "rgba(239,68,68,0.2)",
+        "FUND":        "rgba(234,179,8,0.25)",
+        "LIABILITY":   "rgba(168,85,247,0.2)",
+    }
 
     total_dr = 0.0
     total_cr = 0.0
@@ -81,13 +95,21 @@ def render(conn):
         if gdf.empty:
             continue
 
+        bg  = group_colors.get(gtype, "rgba(99,102,241,0.05)")
+        bdr = group_border.get(gtype, "rgba(99,102,241,0.15)")
+
+        st.markdown(
+            f"<div style='background:{bg}; border-radius:10px; padding:14px 16px 10px 16px; "
+            f"border:1px solid {bdr}; margin-bottom:12px;'>",
+            unsafe_allow_html=True,
+        )
+
         st.subheader(group_labels.get(gtype, gtype))
 
         display = gdf[["code", "name", "dr_balance", "cr_balance"]].copy()
         display.columns = ["Code", "Account", "Dr Balance (₹)", "Cr Balance (₹)"]
         display = display.reset_index(drop=True)
 
-        # Format numbers
         display["Dr Balance (₹)"] = display["Dr Balance (₹)"].apply(
             lambda x: f"{x:,.2f}" if x else "—"
         )
@@ -108,9 +130,10 @@ def render(conn):
             if grp_cr:
                 st.markdown(f"**Sub-total Cr: ₹{grp_cr:,.2f}**")
 
+        st.markdown("</div>", unsafe_allow_html=True)
+
         total_dr += grp_dr
         total_cr += grp_cr
-        st.divider()
 
     # Grand total row
     st.subheader("Grand Total")

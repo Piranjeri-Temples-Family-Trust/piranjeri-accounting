@@ -85,6 +85,10 @@ def render(conn):
 
     # ── Summary table ─────────────────────────────────────────────────────────
     st.divider()
+    st.markdown("""
+    <div style='background:rgba(99,102,241,0.07); border-radius:10px;
+                padding:16px 18px; border:1px solid rgba(99,102,241,0.18); margin-bottom:8px;'>
+    """, unsafe_allow_html=True)
     st.markdown("### Summary")
     sdf = pd.DataFrame(summary_rows)
     totals = {
@@ -110,6 +114,8 @@ def render(conn):
         .applymap(color_surplus, subset=["Surplus / (Deficit) (₹)"])
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
     csv = sdf.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download Festival P&L (CSV)", csv,

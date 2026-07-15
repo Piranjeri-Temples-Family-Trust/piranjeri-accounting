@@ -87,6 +87,14 @@ def render(conn):
     st.divider()
 
     # ── Display ───────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style='background:rgba(99,102,241,0.05); border-radius:10px;
+                padding:12px 14px 8px; border:1px solid rgba(99,102,241,0.12);'>
+    <p style='font-size:0.8rem;color:#888;margin:0 0 6px 2px;'>
+        📋 Scroll inside the table to see all entries
+    </p>
+    """, unsafe_allow_html=True)
+
     display = df.copy()
     display["entry_date"] = pd.to_datetime(display["entry_date"]).dt.strftime("%d-%b-%Y")
     display["debit_amount"]  = display["debit_amount"].apply(
@@ -107,10 +115,11 @@ def render(conn):
             "Narration":    st.column_config.TextColumn(width="large"),
             "Account Name": st.column_config.TextColumn(width="medium"),
         },
-        height=600,
+        height=550,
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.caption(f"Showing {len(df):,} entries.")
+    st.caption(f"Showing {len(df):,} entries. Use the scroll bar on the right of the table to navigate.")
 
     # ── Download ──────────────────────────────────────────────────────────────
     csv = display.to_csv(index=False).encode("utf-8")

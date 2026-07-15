@@ -55,19 +55,25 @@ def render(conn):
 
     # ── INCOME column ─────────────────────────────────────────────────────────
     with col1:
+        st.markdown("""
+        <div style='background:rgba(34,197,94,0.07); border-radius:10px;
+                    padding:16px; border:1px solid rgba(34,197,94,0.2);'>
+        """, unsafe_allow_html=True)
         st.markdown("### 📥 Income")
         for _, row in income_df.iterrows():
             if row["amount"] > 0:
                 st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:4px 0'>"
-                    f"<span>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace'>₹{row['amount']:,.2f}</span>"
+                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
+                    f"border-bottom:1px solid rgba(34,197,94,0.1)'>"
+                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
+                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-        st.divider()
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700'>"
+            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
+            f"border-top:2px solid rgba(34,197,94,0.4);padding-top:8px;margin-top:4px'>"
             f"<span>Total Income</span>"
             f"<span style='font-family:monospace'>₹{total_income:,.2f}</span>"
             f"</div>",
@@ -77,34 +83,39 @@ def render(conn):
         if surplus >= 0:
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#16a34a'>"
-                f"<span><b>Surplus (Excess of Income over Expenditure)</b></span>"
+                f"<span><b>Surplus</b></span>"
                 f"<span style='font-family:monospace'><b>₹{surplus:,.2f}</b></span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
+                f"</div>"
+                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
+                f"border-top:2px solid #16a34a;padding-top:6px;margin-top:6px'>"
                 f"<span>Grand Total</span>"
                 f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ── EXPENDITURE column ────────────────────────────────────────────────────
     with col2:
+        st.markdown("""
+        <div style='background:rgba(239,68,68,0.07); border-radius:10px;
+                    padding:16px; border:1px solid rgba(239,68,68,0.2);'>
+        """, unsafe_allow_html=True)
         st.markdown("### 📤 Expenditure")
         for _, row in exp_df.iterrows():
             if row["amount"] > 0:
                 st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:4px 0'>"
-                    f"<span>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace'>₹{row['amount']:,.2f}</span>"
+                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
+                    f"border-bottom:1px solid rgba(239,68,68,0.1)'>"
+                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
+                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-        st.divider()
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700'>"
+            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
+            f"border-top:2px solid rgba(239,68,68,0.4);padding-top:8px;margin-top:4px'>"
             f"<span>Total Expenditure</span>"
             f"<span style='font-family:monospace'>₹{total_exp:,.2f}</span>"
             f"</div>",
@@ -115,13 +126,11 @@ def render(conn):
             deficit = abs(surplus)
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#dc2626'>"
-                f"<span><b>Deficit (Excess of Expenditure over Income)</b></span>"
+                f"<span><b>Deficit</b></span>"
                 f"<span style='font-family:monospace'><b>₹{deficit:,.2f}</b></span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
+                f"</div>"
+                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
+                f"border-top:2px solid #dc2626;padding-top:6px;margin-top:6px'>"
                 f"<span>Grand Total</span>"
                 f"<span style='font-family:monospace'>₹{total_income + deficit:,.2f}</span>"
                 f"</div>",
@@ -129,12 +138,14 @@ def render(conn):
             )
         else:
             st.markdown(
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
+                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
+                f"border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
                 f"<span>Grand Total</span>"
                 f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.divider()
     if surplus >= 0:
