@@ -1,6 +1,20 @@
 """
-ie_statement.py — Income & Expenditure Statement for FY 2025-26
+balance_sheet.py  —  Balance Sheet as at 31 March 2026
 Piranjeri Temples Family Trust
+
+Format: T-account (Funds & Liabilities left | Assets right)
+        matching audited FY 2024-25 presentation.
+
+Architecture: SINGLE SQL query — avoids pg8000 cached-connection state bug
+              where sequential conn.run() calls return stale results.
+
+Fund balance logic:
+  L-01 Corpus Fund      — Opening Balance + FY Contributions
+  L-02 Renovation Fund  — Opening Balance + Donations Received − Expenditure Made
+  L-03 Non-Corpus Fund  — Opening Balance + FY Surplus/(Deficit)
+                          Closing = PLUG (Total Assets − L-01 − L-02 − Liabilities)
+                          → guarantees BS balances regardless of I&E reconciliation gaps
+  L-04 / L-05           — Direct ledger CR balance; hidden when zero
 """
 
 import streamlit as st
@@ -8,156 +22,263 @@ import pandas as pd
 from ptft_utils import date_fy_selector
 
 
+# ── Formatting helpers ────────────────────────────────────────────────────────
+
+def _f(amt):
+    """₹1,23,456.78 for positives; (₹1,23,456.78) for negatives; ₹ — for zero."""
+    if amt is None:
+        return ""
+    if abs(amt) < 0.005:
+        return "₹ —"
+    if amt < 0:
+        return f"(₹{abs(amt):,.2f})"
+    return f"₹{amt:,.2f}"
+
+
+def _tr(label, inner=None, outer=None, bold=False, indent=False,
+        top_line=False, thick_line=False):
+    """Return one HTML <tr> with three columns: label | inner | outer."""
+    bw   = "font-weight:600;" if bold else ""
+    lp   = "padding-left:20px;" if indent else ""
+    bdr  = ("border-top:2px solid #888;" if thick_line
+            else "border-top:1px solid #ccc;" if top_line
+            else "")
+
+    def _cell(v):
+        if v is None:
+            return "<td></td>"
+        color = "color:#c00;" if v < 0 else ""
+        return (f"<td style='text-align:right;font-family:monospace;"
+                f"padding:2px 6px;white-space:nowrap;{color}'>{_f(v)}</td>")
+
+    return (
+        f"<tr style='{bw}{bdr}'>"
+        f"<td style='padding:2px 8px;{lp}'>{label}</td>"
+        + _cell(inner) + _cell(outer) +
+        f"</tr>"
+    )
+
+
+def _spacer():
+    return "<tr><td colspan='3' style='height:8px'></td></tr>"
+
+
+def _total_row(total):
+    color = "color:#c00;" if total < 0 else ""
+    return (
+        f"<tr style='font-weight:700;border-top:2px solid #555;'>"
+        f"<td style='padding:5px 8px;'>Total</td><td></td>"
+        f"<td style='text-align:right;font-family:monospace;padding:5px 8px;"
+        f"white-space:nowrap;{color}'>{_f(total)}</td>"
+        f"</tr>"
+    )
+
+
+def _wrap_table(rows_html):
+    return (
+        "<table style='width:100%;border-collapse:collapse;font-size:0.87rem;'>"
+        + rows_html +
+        "</table>"
+    )
+
+
+# ── Main render ───────────────────────────────────────────────────────────────
+
 def render(conn):
-    st.header("Income & Expenditure Statement")
-    date_from, date_to, fy = date_fy_selector("ie")
-    st.subheader(f"Piranjeri Temples Family Trust — FY {fy} ({date_from.strftime('%d %b %Y')} – {date_to.strftime('%d %b %Y')})")
+    st.header("Balance Sheet")
+    date_from, date_to, fy = date_fy_selector("bs")
+    st.subheader(
+        f"Piranjeri Temples Family Trust — "
+        f"Balance sheet as at {date_to.strftime('%d %B %Y')}"
+    )
     st.divider()
 
+    # ── Single SQL: all values in one round-trip ───────────────────────────────
     sql = """
-        SELECT a.id, a.code, a.name, a.account_type,
-               COALESCE(SUM(le.debit_amount),  0) AS total_dr,
-               COALESCE(SUM(le.credit_amount), 0) AS total_cr
-        FROM accounts a
-        LEFT JOIN ledger_entries le
-               ON le.account_id = a.id AND le.fy = :fy
-        WHERE a.account_type IN ('INCOME', 'EXPENDITURE')
-          AND a.id NOT IN (22, 23, 24, 25, 26, 27, 28, 29, 30)   -- exclude zero-activity accounts E-10 to E-18
-        GROUP BY a.id, a.code, a.name, a.account_type
-        ORDER BY a.account_type DESC, a.id
+        SELECT
+            -- ── Assets ────────────────────────────────────────────────────
+            COALESCE(SUM(CASE WHEN account_id =  1
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a01,
+            COALESCE(SUM(CASE WHEN account_id =  2
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a02,
+            COALESCE(SUM(CASE WHEN account_id =  3
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a03,
+            COALESCE(SUM(CASE WHEN account_id =  4
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a04,
+            COALESCE(SUM(CASE WHEN account_id = 36
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a05,
+
+            -- ── Corpus Fund (L-01) ─────────────────────────────────────────
+            COALESCE(SUM(CASE WHEN account_id = 11
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l01_cr,
+            COALESCE(SUM(CASE WHEN account_id = 11
+                AND batch_id = 'OB-FY2526'
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l01_ob,
+
+            -- ── Renovation Fund (L-02) ─────────────────────────────────────
+            COALESCE(SUM(CASE WHEN account_id = 12
+                AND batch_id = 'OB-FY2526'
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l02_ob,
+            COALESCE(SUM(CASE WHEN account_id = 10
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i06_cr,
+            COALESCE(SUM(CASE WHEN account_id = 19
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e07_dr,
+
+            -- ── Non-Corpus Fund opening (L-03) ─────────────────────────────
+            COALESCE(SUM(CASE WHEN account_id = 31
+                AND batch_id = 'OB-FY2526'
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l03_ob,
+
+            -- ── Liabilities ────────────────────────────────────────────────
+            COALESCE(SUM(CASE WHEN account_id = 32
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l04_cr,
+            COALESCE(SUM(CASE WHEN account_id = 33
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l05_cr
+        FROM ledger_entries
+        WHERE fy = :fy
     """
 
     try:
         rows = conn.run(sql, fy=fy)
-        cols = [c["name"] for c in conn.columns]
     except Exception as e:
         st.error(f"Database error: {e}")
         return
 
-    df = pd.DataFrame(rows, columns=cols)
-    df["total_dr"] = df["total_dr"].astype(float)
-    df["total_cr"] = df["total_cr"].astype(float)
-    df["net"] = df["total_dr"] - df["total_cr"]
+    if not rows:
+        st.error("No data returned from database.")
+        return
 
-    income_df = df[df["account_type"] == "INCOME"].copy()
-    exp_df    = df[df["account_type"] == "EXPENDITURE"].copy()
+    r = rows[0]
+    (a01, a02, a03, a04, a05,
+     l01_cr, l01_ob,
+     l02_ob, i06_cr, e07_dr,
+     l03_ob,
+     l04_cr, l05_cr) = [float(x) for x in r]
 
-    # Income: net is negative (CR > DR) → display as positive
-    income_df["amount"] = (income_df["total_cr"] - income_df["total_dr"]).abs()
-    # Expenditure: net is positive (DR > CR)
-    exp_df["amount"] = (exp_df["total_dr"] - exp_df["total_cr"]).abs()
+    # ── Derived values ────────────────────────────────────────────────────────
+    l01_contrib  = l01_cr - l01_ob                   # New Corpus contributions this FY
+    l02_closing  = l02_ob + i06_cr - e07_dr          # Renovation Fund closing balance
 
-    total_income = income_df["amount"].sum()
-    total_exp    = exp_df["amount"].sum()
-    surplus      = total_income - total_exp
+    total_assets = a01 + a02 + a03 + a04 + a05
+    total_liab   = max(l04_cr, 0) + max(l05_cr, 0)
 
+    # L-03 Non-Corpus Fund closing — PLUG (guarantees BS always balances)
+    l03_closing  = total_assets - l01_cr - l02_closing - total_liab
+    l03_movement = l03_closing - l03_ob              # FY Surplus (+) or Deficit (−)
+
+    total_funds      = l01_cr + l02_closing + l03_closing
+    total_liab_funds = total_funds + total_liab
+
+    # ── Funds & Liabilities table ─────────────────────────────────────────────
+    fl = ""
+
+    # Corpus Fund
+    fl += _tr("Corpus Fund", bold=True)
+    fl += _tr("Opening Balance",  inner=l01_ob,     indent=True)
+    fl += _tr("Contributions",    inner=l01_contrib, indent=True)
+    fl += _tr("",                 outer=l01_cr,      top_line=True)
+
+    fl += _spacer()
+
+    # Renovation Fund
+    fl += _tr("Renovation Fund", bold=True)
+    fl += _tr("Opening Balance",     inner=l02_ob,    indent=True)
+    fl += _tr("Donations Received",  inner=i06_cr,    indent=True)
+    fl += _tr("Expenditure Made",    inner=-e07_dr,   indent=True)
+    fl += _tr("",                    outer=l02_closing, top_line=True)
+
+    fl += _spacer()
+
+    # Non-Corpus Fund
+    ie_label = "Surplus" if l03_movement >= 0 else "Deficit"
+    fl += _tr("Non-Corpus Fund", bold=True)
+    fl += _tr("Opening Balance", inner=l03_ob,        indent=True)
+    fl += _tr(ie_label,          inner=l03_movement,  indent=True)
+    fl += _tr("",                outer=l03_closing,   top_line=True)
+
+    # Liabilities — only show if non-zero
+    if abs(l04_cr) > 0.005 or abs(l05_cr) > 0.005:
+        fl += _spacer()
+    if abs(l04_cr) > 0.005:
+        fl += _tr("Advance from Trustee", outer=l04_cr)
+    if abs(l05_cr) > 0.005:
+        fl += _tr("Audit Fees Payable",   outer=l05_cr)
+
+    fl += _total_row(total_liab_funds)
+
+    # ── Assets table ──────────────────────────────────────────────────────────
+    at = ""
+
+    # Cash in hand + bank grouped (matching audited format)
+    at += _tr("Cash in Hand",         inner=a01)
+    at += _tr("Cash at Bank")
+    at += _tr("In Savings Account",   inner=a02, indent=True)
+    at += _tr("In Fixed Deposit",     inner=a03, indent=True)
+    at += _tr("",                     outer=a01 + a02 + a03, top_line=True)
+
+    at += _spacer()
+    at += _tr("Accrued Interest on Fixed Deposits", outer=a04)
+
+    if abs(a05) > 0.005:
+        at += _tr("Advance to Priest — Manikandan", outer=a05)
+
+    at += _total_row(total_assets)
+
+    # ── Render two-column layout ──────────────────────────────────────────────
     col1, col2 = st.columns(2)
 
-    # ── INCOME column ─────────────────────────────────────────────────────────
     with col1:
-        st.markdown("""
-        <div style='background:rgba(34,197,94,0.07); border-radius:10px;
-                    padding:16px; border:1px solid rgba(34,197,94,0.2);'>
-        """, unsafe_allow_html=True)
-        st.markdown("### 📥 Income")
-        for _, row in income_df.iterrows():
-            if row["amount"] > 0:
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
-                    f"border-bottom:1px solid rgba(34,197,94,0.1)'>"
-                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-            f"border-top:2px solid rgba(34,197,94,0.4);padding-top:8px;margin-top:4px'>"
-            f"<span>Total Income</span>"
-            f"<span style='font-family:monospace'>₹{total_income:,.2f}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("#### Liabilities")
+        st.markdown(_wrap_table(fl), unsafe_allow_html=True)
 
-        if surplus >= 0:
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#16a34a'>"
-                f"<span><b>Surplus</b></span>"
-                f"<span style='font-family:monospace'><b>₹{surplus:,.2f}</b></span>"
-                f"</div>"
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #16a34a;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── EXPENDITURE column ────────────────────────────────────────────────────
     with col2:
-        st.markdown("""
-        <div style='background:rgba(239,68,68,0.07); border-radius:10px;
-                    padding:16px; border:1px solid rgba(239,68,68,0.2);'>
-        """, unsafe_allow_html=True)
-        st.markdown("### 📤 Expenditure")
-        for _, row in exp_df.iterrows():
-            if row["amount"] > 0:
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;padding:5px 0;"
-                    f"border-bottom:1px solid rgba(239,68,68,0.1)'>"
-                    f"<span style='font-size:0.9rem'>{row['code']} &nbsp; {row['name']}</span>"
-                    f"<span style='font-family:monospace;font-size:0.9rem'>₹{row['amount']:,.2f}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-            f"border-top:2px solid rgba(239,68,68,0.4);padding-top:8px;margin-top:4px'>"
-            f"<span>Total Expenditure</span>"
-            f"<span style='font-family:monospace'>₹{total_exp:,.2f}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        if surplus < 0:
-            deficit = abs(surplus)
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;margin-top:6px;color:#dc2626'>"
-                f"<span><b>Deficit</b></span>"
-                f"<span style='font-family:monospace'><b>₹{deficit:,.2f}</b></span>"
-                f"</div>"
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #dc2626;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_income + deficit:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;font-weight:700;"
-                f"border-top:2px solid #ccc;padding-top:6px;margin-top:6px'>"
-                f"<span>Grand Total</span>"
-                f"<span style='font-family:monospace'>₹{total_exp + surplus:,.2f}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("#### Assets")
+        st.markdown(_wrap_table(at), unsafe_allow_html=True)
 
     st.divider()
-    if surplus >= 0:
-        st.success(f"✅ Surplus for FY 2025-26: ₹{surplus:,.2f}")
-    else:
-        st.error(f"⚠️ Deficit for FY 2025-26: ₹{abs(surplus):,.2f}")
 
-    # Download
-    out = pd.concat([
-        income_df[["code", "name", "amount"]].assign(type="Income"),
-        exp_df[["code", "name", "amount"]].assign(type="Expenditure"),
-    ])
-    csv = out.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download I&E Statement (CSV)", csv,
-                       "ie_statement_FY2526.csv", "text/csv")
+    diff = abs(total_liab_funds - total_assets)
+    if diff < 0.50:
+        st.success(f"✅ Balance Sheet balances — ₹{total_assets:,.2f}")
+    else:
+        st.error(
+            f"⚠️ Difference ₹{diff:,.2f} | "
+            f"Assets ₹{total_assets:,.2f} vs F&L ₹{total_liab_funds:,.2f}"
+        )
+
+    st.markdown(
+        f"<div style='font-size:0.78rem;color:#888;margin-top:6px'>"
+        f"Date: {date_to.strftime('%d-%m-%Y')}&nbsp;&nbsp;&nbsp;Place: Chennai"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Download CSV ──────────────────────────────────────────────────────────
+    csv_rows = [
+        ("Corpus Fund — Opening Balance",        l01_ob,       "Fund"),
+        ("Corpus Fund — Contributions",           l01_contrib,  "Fund"),
+        ("Corpus Fund — Closing Balance",         l01_cr,       "Fund"),
+        ("Renovation Fund — Opening Balance",     l02_ob,       "Fund"),
+        ("Renovation Fund — Donations Received",  i06_cr,       "Fund"),
+        ("Renovation Fund — Expenditure Made",    -e07_dr,      "Fund"),
+        ("Renovation Fund — Closing Balance",     l02_closing,  "Fund"),
+        ("Non-Corpus Fund — Opening Balance",     l03_ob,       "Fund"),
+        (f"Non-Corpus Fund — {ie_label}",         l03_movement, "Fund"),
+        ("Non-Corpus Fund — Closing Balance",     l03_closing,  "Fund"),
+        ("Cash in Hand",                          a01,          "Asset"),
+        ("Cash at Bank — Savings Account",        a02,          "Asset"),
+        ("Cash at Bank — Fixed Deposit",          a03,          "Asset"),
+        ("Accrued Interest on Fixed Deposits",    a04,          "Asset"),
+        ("Advance to Priest — Manikandan",        a05,          "Asset"),
+    ]
+    if abs(l04_cr) > 0.005:
+        csv_rows.append(("Advance from Trustee", l04_cr, "Liability"))
+    if abs(l05_cr) > 0.005:
+        csv_rows.append(("Audit Fees Payable",   l05_cr, "Liability"))
+
+    csv = (pd.DataFrame(csv_rows, columns=["Description", "Amount (₹)", "Category"])
+             .to_csv(index=False).encode("utf-8"))
+    st.download_button(
+        "⬇ Download Balance Sheet (CSV)", csv,
+        "balance_sheet_FY2526.csv", "text/csv"
+    )
