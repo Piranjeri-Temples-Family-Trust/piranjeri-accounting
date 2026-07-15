@@ -222,19 +222,19 @@ with st.sidebar:
     # ── Footer: clock + logout ─────────────────────────────────────────────────
     now = datetime.now()
 
-    # Clock widget — right-aligned, Windows tray style, compact
+    # Clock widget — compact, right-aligned
     st.markdown(f"""
-    <div style='display:flex; justify-content:flex-end; margin-bottom:6px;'>
-        <div style='text-align:right; line-height:1.25;
-                    border-radius:6px; padding:4px 9px;
-                    background:rgba(99,102,241,0.22);
-                    border:1px solid rgba(99,102,241,0.45);'>
-            <div style='font-size:0.85rem; font-weight:700; font-family:monospace;
-                        letter-spacing:2px; color:#c7d2fe; margin:0;'>{now.strftime('%H:%M')}</div>
-            <div style='font-size:0.57rem; color:#94a3b8; margin:0;'>{now.strftime('%d/%m/%Y')}</div>
-            <div style='font-size:0.57rem; color:#a5b4fc; margin:0;'>{st.session_state.user}</div>
-        </div>
-    </div>
+    <p style='text-align:right; margin:0 0 4px 0; line-height:1;'>
+        <span style='display:inline-block; text-align:right; line-height:1.3;
+                     border-radius:6px; padding:3px 8px;
+                     background:rgba(99,102,241,0.22);
+                     border:1px solid rgba(99,102,241,0.45);
+                     font-family:monospace;'>
+            <span style='font-size:0.82rem; font-weight:700; letter-spacing:2px; color:#c7d2fe;'>{now.strftime('%H:%M')}</span><br>
+            <span style='font-size:0.56rem; color:#94a3b8;'>{now.strftime('%d/%m/%Y')}</span>
+            <span style='font-size:0.56rem; color:#a5b4fc; margin-left:4px;'>{st.session_state.user}</span>
+        </span>
+    </p>
     """, unsafe_allow_html=True)
 
     # Logout button — small, left side

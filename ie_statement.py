@@ -22,7 +22,7 @@ def render(conn):
         LEFT JOIN ledger_entries le
                ON le.account_id = a.id AND le.fy = :fy
         WHERE a.account_type IN ('INCOME', 'EXPENDITURE')
-          AND a.id NOT IN (22, 23, 24, 26)   -- exclude E-10,E-11,E-12,E-14
+          AND a.id NOT IN (22, 23, 24, 25, 26, 27, 28, 29, 30)   -- exclude zero-activity accounts E-10 to E-18
         GROUP BY a.id, a.code, a.name, a.account_type
         ORDER BY a.account_type DESC, a.id
     """
