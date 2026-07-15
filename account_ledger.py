@@ -89,6 +89,8 @@ def render(conn):
         return
 
     df = pd.DataFrame(rows, columns=cols)
+    df["debit_amount"]  = df["debit_amount"].astype(float)
+    df["credit_amount"] = df["credit_amount"].astype(float)
 
     # ── Opening balance before date_from ────────────────────────────────────
     ob_sql = """

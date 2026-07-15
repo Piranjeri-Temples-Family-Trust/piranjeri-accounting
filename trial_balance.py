@@ -44,6 +44,8 @@ def render(conn):
         return
 
     df = pd.DataFrame(rows, columns=cols)
+    df["total_dr"] = df["total_dr"].astype(float)
+    df["total_cr"] = df["total_cr"].astype(float)
     df["net"] = df["total_dr"] - df["total_cr"]
 
     # For normal-balance display: show DR balance accounts in DR col, CR in CR col
