@@ -2,6 +2,8 @@
 # Run: streamlit run app_accounting.py
 
 import streamlit as st
+import pg8000.native
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -69,11 +71,52 @@ with st.sidebar:
     st.divider()
     st.caption("FY 2025-26 (Apr 2025 – Mar 2026)")
 
-# ── Main content ──────────────────────────────────────────────────────────────
-try:
-    from expense_entry import render_expense_entry
-    render_expense_entry(st.session_state.user)
-except Exception as _e:
-    import traceback
-    st.error(f"Startup error: {_e}")
-    st.code(traceback.format_exc())
+# ── Shared database connection ────────────────────────────────────────────────
+@st.cache_resource
+def get_connection():
+    dsn = st.secrets["neon"]["dsn"]
+    p = urlparse(dsn)
+    return pg8000.native.Connection(
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port or 5432,
+        database=p.path.lstrip("/"),
+        ssl_context=True,
+    )
+
+conn = get_connection()
+
+# ── Tabs — reports first, then journal/expenses ───────────────────────────────
+tab_tb, tab_ledger, tab_expense = st.tabs([
+    "⚖️ Trial Balance",
+    "📒 Account Ledger",
+    "📋 Journal & Expenses",
+])
+
+with tab_tb:
+    try:
+        import trial_balance
+        trial_balance.render(conn)
+    except Exception as _e:
+        import traceback
+        st.error(f"Trial Balance error: {_e}")
+        st.code(traceback.format_exc())
+
+with tab_ledger:
+    try:
+        import account_ledger
+        account_ledger.render(conn)
+    except Exception as _e:
+        import traceback
+        st.error(f"Account Ledger error: {_e}")
+        st.code(traceback.format_exc())
+
+with tab_expense:
+    try:
+        from expense_entry import render_expense_entry
+        render_expense_entry(st.session_state.user)
+    except Exception as _e:
+        import traceback
+        st.error(f"Expense Entry error: {_e}")
+        st.code(traceback.format_exc())
