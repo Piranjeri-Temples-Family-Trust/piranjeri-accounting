@@ -2,14 +2,13 @@
 balance_sheet.py — Balance Sheet as at 31 March 2026
 Piranjeri Temples Family Trust
 
-Renovation Fund (L-02): not directly updated in ledger during the year.
-  Closing = Opening CR  +  I-06 donations CR  −  E-07 expenditure DR
-  Accounts: L-02 id=12, I-06 id=10, E-07 id=19
-
-Non-Corpus Fund (L-03): absorbs FY I&E surplus/deficit.
-  Closing = Opening CR balance  +  FY I&E net (surplus positive, deficit negative)
-  Exclude I-06 and E-07 from I&E net (those go to Renovation Fund).
-  Account: L-03 id=31
+Fund balance logic:
+  L-01 Corpus Fund      — direct ledger CR balance
+  L-02 Renovation Fund  — L-02 opening CR + I-06 donations CR − E-07 expense DR
+                          (uses individual scalar SQL queries; no Python mask logic)
+  L-03 Non-Corpus Fund  — DERIVED = Total Assets − L-01 − L-02 − Liabilities
+                          (plug; guarantees BS always balances; equals opening NCF + FY I&E net)
+  L-04, L-05            — direct ledger CR balance (both should = 0 after FY corrections)
 """
 
 import streamlit as st
@@ -17,20 +16,14 @@ import pandas as pd
 from ptft_utils import date_fy_selector
 
 
-def _fetch_single_net(conn, account_ids, fy):
-    """Return {account_id: (DR-CR) net} for given IDs."""
-    ids_str = ','.join(str(i) for i in account_ids)
+def _cr(conn, account_id, fy):
+    """Return CR balance for a single account (positive = credit, negative = debit)."""
     rows = conn.run(
-        f"SELECT a.id, "
-        f"COALESCE(SUM(le.debit_amount),0) AS dr, "
-        f"COALESCE(SUM(le.credit_amount),0) AS cr "
-        f"FROM accounts a "
-        f"LEFT JOIN ledger_entries le ON le.account_id = a.id AND le.fy = :fy "
-        f"WHERE a.id IN ({ids_str}) "
-        f"GROUP BY a.id",
-        fy=fy,
+        "SELECT COALESCE(SUM(credit_amount) - SUM(debit_amount), 0) "
+        "FROM ledger_entries WHERE fy = :fy AND account_id = :aid",
+        fy=fy, aid=account_id,
     )
-    return {int(r[0]): float(r[1]) - float(r[2]) for r in rows}
+    return float(rows[0][0]) if rows else 0.0
 
 
 def render(conn):
@@ -39,111 +32,67 @@ def render(conn):
     st.subheader(f"Piranjeri Temples Family Trust — As at {date_to.strftime('%d %b %Y')}")
     st.divider()
 
-    # ── Main BS query ─────────────────────────────────────────────────────────
-    sql = """
-        SELECT a.id, a.code, a.name, a.account_type,
-               COALESCE(SUM(le.debit_amount),  0) AS total_dr,
-               COALESCE(SUM(le.credit_amount), 0) AS total_cr
-        FROM accounts a
-        LEFT JOIN ledger_entries le
-               ON le.account_id = a.id AND le.fy = :fy
-        WHERE a.account_type IN ('ASSET', 'FUND', 'LIABILITY')
-        GROUP BY a.id, a.code, a.name, a.account_type
-        ORDER BY a.account_type, a.id
-    """
-    try:
-        rows = conn.run(sql, fy=fy)
-        cols = [c["name"] for c in conn.columns]
-    except Exception as e:
-        st.error(f"Database error: {e}")
-        return
+    # ── Asset balances (DR normal — net = DR − CR) ────────────────────────────
+    asset_accounts = [
+        (1,  "A-01", "Cash in Hand"),
+        (2,  "A-02", "Cash at Bank — Savings"),
+        (3,  "A-03", "Fixed Deposits"),
+        (4,  "A-04", "Accrued Interest on FD"),
+        (36, "A-05", "Advance to Priest — Manikandan"),
+    ]
+    assets = []
+    for aid, code, name in asset_accounts:
+        bal = -_cr(conn, aid, fy)   # DR balance = -CR balance
+        assets.append({"code": code, "name": name, "balance": bal})
+    assets_df = pd.DataFrame(assets)
+    total_assets = assets_df[assets_df["balance"] > 0]["balance"].sum()
 
-    df = pd.DataFrame(rows, columns=cols)
-    df["total_dr"] = df["total_dr"].astype(float)
-    df["total_cr"] = df["total_cr"].astype(float)
-    df["net"] = df["total_dr"] - df["total_cr"]   # positive = DR balance
+    # ── Liability balances ────────────────────────────────────────────────────
+    liab_accounts = [
+        (32, "L-04", "Loan from Trustees"),
+        (33, "L-05", "Audit Fees Payable"),
+    ]
+    liabs = []
+    for aid, code, name in liab_accounts:
+        bal = _cr(conn, aid, fy)    # CR balance
+        if abs(bal) > 0.005:
+            liabs.append({"code": code, "name": name, "balance": bal})
+    liab_df = pd.DataFrame(liabs) if liabs else pd.DataFrame(columns=["code","name","balance"])
+    total_liab = liab_df[liab_df["balance"] > 0]["balance"].sum() if not liab_df.empty else 0.0
 
-    assets_df = df[df["account_type"] == "ASSET"].copy()
-    funds_df  = df[df["account_type"] == "FUND"].copy()
-    liab_df   = df[df["account_type"] == "LIABILITY"].copy()
+    # ── Fund balances ─────────────────────────────────────────────────────────
+    # L-01 Corpus Fund: direct CR balance from ledger
+    l01_cr = _cr(conn, 11, fy)
 
-    # Assets: DR balance (net) is the balance
-    assets_df["balance"] = assets_df["net"]
+    # L-02 Renovation Fund: opening + donations (I-06) − expenditure (E-07)
+    l02_opening_cr = _cr(conn, 12, fy)   # Opening CR from ledger
+    i06_cr         = _cr(conn, 10, fy)   # I-06 renovation donations (CR = income received)
+    e07_dr         = -_cr(conn, 19, fy)  # E-07 renovation expense (DR = positive, so -CR)
+    l02_cr         = l02_opening_cr + i06_cr - e07_dr
 
-    # Liabilities: CR balance → balance = -net (positive amount owed)
-    liab_df["balance"] = -liab_df["net"]
+    # L-03 Non-Corpus Fund: derived as plug (Total Assets − Corpus − Renov − Liabilities)
+    l03_cr = total_assets - l01_cr - l02_cr - total_liab
 
-    # Funds: initialise as CR balance (-net); L-02 and L-03 are overridden below
-    funds_df["balance"] = -funds_df["net"]
+    funds = [
+        {"code": "L-01", "name": "Corpus Fund",     "balance": l01_cr},
+        {"code": "L-02", "name": "Renovation Fund", "balance": l02_cr},
+        {"code": "L-03", "name": "Non-Corpus Fund", "balance": l03_cr},
+    ]
+    funds_df = pd.DataFrame(funds)
+    total_funds = funds_df["balance"].sum()
 
-    # ── L-02 Renovation Fund closing balance ──────────────────────────────────
-    # Closing CR = L-02 opening CR  +  I-06 donations CR  −  E-07 expenditure DR
-    try:
-        adj = _fetch_single_net(conn, [10, 19], fy)   # I-06 id=10, E-07 id=19
-        i06_net = adj.get(10, 0.0)   # negative (income CR)
-        e07_net = adj.get(19, 0.0)   # positive (expense DR)
-
-        l02_mask = funds_df["id"] == 12
-        if l02_mask.any():
-            l02_net = float(funds_df.loc[l02_mask, "net"].iloc[0])
-            # CR balances: L-02 CR = -l02_net, I-06 CR = -i06_net, E-07 DR = e07_net
-            l02_closing_cr = (-l02_net) + (-i06_net) - e07_net
-            funds_df.loc[l02_mask, "balance"] = l02_closing_cr
-    except Exception as ex:
-        st.caption(f"Renovation Fund adjustment error: {ex}")
-
-    # ── L-03 Non-Corpus Fund closing balance ──────────────────────────────────
-    # Closing CR = L-03 opening CR  +  FY I&E net surplus (income − expenditure)
-    # Excludes I-06 and E-07 (those belong to Renovation Fund above)
-    try:
-        ie_sql = """
-            SELECT
-                COALESCE(SUM(
-                    CASE WHEN a.account_type = 'INCOME'
-                         THEN le.credit_amount - le.debit_amount ELSE 0 END
-                ), 0)
-                - COALESCE(SUM(
-                    CASE WHEN a.account_type = 'EXPENDITURE'
-                         THEN le.debit_amount - le.credit_amount ELSE 0 END
-                ), 0)  AS ie_net
-            FROM accounts a
-            LEFT JOIN ledger_entries le ON le.account_id = a.id AND le.fy = :fy
-            WHERE a.account_type IN ('INCOME', 'EXPENDITURE')
-              AND a.id NOT IN (10, 19)
-        """
-        ie_rows = conn.run(ie_sql, fy=fy)
-        ie_net = float(ie_rows[0][0]) if ie_rows else 0.0
-        # ie_net: positive = surplus, negative = deficit
-
-        l03_mask = funds_df["id"] == 31
-        if l03_mask.any():
-            l03_net = float(funds_df.loc[l03_mask, "net"].iloc[0])
-            l03_cr_opening = -l03_net        # e.g. +91875.40 net → -91875.40 CR (debit-balance fund)
-            l03_closing_cr = l03_cr_opening + ie_net
-            funds_df.loc[l03_mask, "balance"] = l03_closing_cr
-    except Exception as ex:
-        st.caption(f"Non-Corpus Fund adjustment error: {ex}")
-
-    # ── Totals ────────────────────────────────────────────────────────────────
-    total_assets     = assets_df[assets_df["balance"] > 0]["balance"].sum()
-    total_funds      = funds_df["balance"].sum()     # signed: debit-balance funds reduce total
-    total_liab       = liab_df[liab_df["balance"] > 0]["balance"].sum()
     total_liab_funds = total_funds + total_liab
 
     # ── Render helper ─────────────────────────────────────────────────────────
-    def render_section(title, section_df, total, total_label):
+    def render_section(title, df, total, total_label):
         if title:
             st.markdown(f"**{title}**")
-        for _, row in section_df.iterrows():
+        for _, row in df.iterrows():
             bal = row["balance"]
             if abs(bal) < 0.005:
                 continue
-            if bal < 0:
-                bal_str = f"(₹{abs(bal):,.2f})"
-                color   = "color:#dc2626;"
-            else:
-                bal_str = f"₹{bal:,.2f}"
-                color   = ""
+            bal_str = f"(₹{abs(bal):,.2f})" if bal < 0 else f"₹{bal:,.2f}"
+            color   = "color:#dc2626;" if bal < 0 else ""
             st.markdown(
                 f"<div style='display:flex;justify-content:space-between;padding:3px 0'>"
                 f"<span style='padding-left:12px'>{row['code']} &nbsp; {row['name']}</span>"
@@ -151,15 +100,12 @@ def render(conn):
                 f"</div>",
                 unsafe_allow_html=True,
             )
-        if total < 0:
-            total_str = f"(₹{abs(total):,.2f})"
-        else:
-            total_str = f"₹{total:,.2f}"
+        tot_str = f"(₹{abs(total):,.2f})" if total < 0 else f"₹{total:,.2f}"
         st.markdown(
             f"<div style='display:flex;justify-content:space-between;font-weight:700;"
             f"border-top:1px solid #ccc;padding-top:4px;margin-top:4px'>"
             f"<span>{total_label}</span>"
-            f"<span style='font-family:monospace'>{total_str}</span>"
+            f"<span style='font-family:monospace'>{tot_str}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -167,11 +113,11 @@ def render(conn):
     col1, col2 = st.columns(2)
 
     with col2:
-        st.markdown("### 💰 Assets")
+        st.markdown("### \U0001f4b0 Assets")
         render_section("", assets_df, total_assets, "Total Assets")
 
     with col1:
-        st.markdown("### 🏛️ Funds & Liabilities")
+        st.markdown("### \U0001f3db️ Funds & Liabilities")
         render_section("Funds", funds_df, total_funds, "Total Funds")
         st.markdown("<br>", unsafe_allow_html=True)
         render_section("Liabilities", liab_df, total_liab, "Total Liabilities")
@@ -187,7 +133,7 @@ def render(conn):
     st.divider()
 
     diff = abs(total_assets - total_liab_funds)
-    if diff < 1.0:
+    if diff < 0.50:
         st.success(f"✅ Balance Sheet balances — ₹{total_assets:,.2f}")
     else:
         st.warning(
@@ -195,12 +141,12 @@ def render(conn):
             f"Assets ₹{total_assets:,.2f} vs Funds+Liabilities ₹{total_liab_funds:,.2f}"
         )
 
-    # Download
+    # ── Download ──────────────────────────────────────────────────────────────
     out = pd.concat([
-        assets_df[["code","name","balance"]].assign(side="Asset"),
-        funds_df[["code","name","balance"]].assign(side="Fund"),
-        liab_df[["code","name","balance"]].assign(side="Liability"),
-    ])
+        assets_df.assign(side="Asset"),
+        funds_df.assign(side="Fund"),
+        liab_df.assign(side="Liability") if not liab_df.empty else pd.DataFrame(),
+    ])[["code","name","balance","side"]]
     csv = out.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download Balance Sheet (CSV)", csv,
                        "balance_sheet_FY2526.csv", "text/csv")

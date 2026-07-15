@@ -111,7 +111,7 @@ def render(conn):
             "Expenditure (₹)": "₹{:,.2f}",
             "Surplus / (Deficit) (₹)": "₹{:,.2f}",
         })
-        .applymap(color_surplus, subset=["Surplus / (Deficit) (₹)"])
+        .map(color_surplus, subset=["Surplus / (Deficit) (₹)"])
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 

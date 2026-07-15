@@ -222,20 +222,15 @@ with st.sidebar:
     # ── Footer: clock + logout ─────────────────────────────────────────────────
     now = datetime.now()
 
-    # Clock widget — compact, right-aligned
-    st.markdown(f"""
-    <p style='text-align:right; margin:0 0 4px 0; line-height:1;'>
-        <span style='display:inline-block; text-align:right; line-height:1.3;
-                     border-radius:6px; padding:3px 8px;
-                     background:rgba(99,102,241,0.22);
-                     border:1px solid rgba(99,102,241,0.45);
-                     font-family:monospace;'>
-            <span style='font-size:0.82rem; font-weight:700; letter-spacing:2px; color:#c7d2fe;'>{now.strftime('%H:%M')}</span><br>
-            <span style='font-size:0.56rem; color:#94a3b8;'>{now.strftime('%d/%m/%Y')}</span>
-            <span style='font-size:0.56rem; color:#a5b4fc; margin-left:4px;'>{st.session_state.user}</span>
-        </span>
-    </p>
-    """, unsafe_allow_html=True)
+    # Clock widget — simple, always visible
+    st.markdown(
+        f"<div style='text-align:right; font-family:monospace; font-weight:700; "
+        f"font-size:0.85rem; color:#c7d2fe; letter-spacing:1px; margin-bottom:1px;'"
+        f">{now.strftime('%H:%M')}</div>"
+        f"<div style='text-align:right; font-size:0.65rem; color:#94a3b8;'"
+        f">{now.strftime('%d/%m/%Y')} · {st.session_state.user}</div>",
+        unsafe_allow_html=True,
+    )
 
     # Logout button — small, left side
     st.markdown("<div class='logout-btn'>", unsafe_allow_html=True)
