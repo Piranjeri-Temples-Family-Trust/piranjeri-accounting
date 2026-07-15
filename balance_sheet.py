@@ -104,7 +104,11 @@ def render(conn):
     }
     ob = _OB.get(fy, dict(l01=0.0, l02=0.0, l03=0.0, l04=0.0, l05=0.0))
 
-    # ── Single SQL: assets + Renovation movements only (7 columns, all reliable) ─
+    # ── Single SQL: assets + I&E totals (7 columns, all reliable) ───────────────
+    # Renovation income (I-06, acct 10) and expenditure (E-07, acct 19) are
+    # included in total_income / total_exp — NOT separately broken out in the BS.
+    # The full I&E surplus flows into Non-Corpus Fund (auditor's format).
+    # Renovation Fund (L-02) shows its static opening balance only.
     sql = """
         SELECT
             COALESCE(SUM(CASE WHEN account_id =  1
@@ -117,10 +121,10 @@ def render(conn):
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS a04,
             COALESCE(SUM(CASE WHEN account_id = 36
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS a05,
-            COALESCE(SUM(CASE WHEN account_id = 10
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i06_cr,
-            COALESCE(SUM(CASE WHEN account_id = 19
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e07_dr
+            COALESCE(SUM(CASE WHEN account_id IN (5,6,7,8,9,10)
+                THEN credit_amount - debit_amount ELSE 0 END), 0) AS total_income,
+            COALESCE(SUM(CASE WHEN account_id BETWEEN 13 AND 30
+                THEN debit_amount - credit_amount ELSE 0 END), 0) AS total_exp
         FROM ledger_entries
         WHERE fy = :fy
     """
@@ -135,26 +139,25 @@ def render(conn):
         st.error("No data returned from database.")
         return
 
-    a01, a02, a03, a04, a05, i06_cr, e07_dr = [float(x) for x in rows[0]]
+    a01, a02, a03, a04, a05, total_income, total_exp = [float(x) for x in rows[0]]
 
-    # ── Fund & liability values from audited opening balances ─────────────────
+    # ── Fund & liability values ───────────────────────────────────────────────
     l01_ob      = ob['l01']
     l01_cr      = l01_ob          # No new Corpus contributions in FY 2025-26
     l01_contrib = 0.0
-    l02_ob      = ob['l02']
+    l02_closing = ob['l02']       # Renovation Fund: static (movements are in I&E)
     l03_ob      = ob['l03']
     l04_cr      = ob['l04']       # ₹0 — Trustee loan fully repaid this FY
     l05_cr      = ob['l05']       # ₹0 — Audit fees fully paid this FY
 
     # ── Derived values ────────────────────────────────────────────────────────
-    l02_closing  = l02_ob + i06_cr - e07_dr          # Renovation Fund closing balance
+    ie_surplus   = total_income - total_exp           # From I&E Statement
+    ie_label     = "Surplus" if ie_surplus >= 0 else "Deficit"
+
+    l03_closing  = l03_ob + ie_surplus                # NCF closing = opening + I&E result
 
     total_assets = a01 + a02 + a03 + a04 + a05
     total_liab   = max(l04_cr, 0) + max(l05_cr, 0)
-
-    # L-03 Non-Corpus Fund closing — PLUG (guarantees BS always balances)
-    l03_closing  = total_assets - l01_cr - l02_closing - total_liab
-    l03_movement = l03_closing - l03_ob              # FY Surplus (+) or Deficit (−)
 
     total_funds      = l01_cr + l02_closing + l03_closing
     total_liab_funds = total_funds + total_liab
@@ -170,21 +173,16 @@ def render(conn):
 
     fl += _spacer()
 
-    # Renovation Fund
-    fl += _tr("Renovation Fund", bold=True)
-    fl += _tr("Opening Balance",     inner=l02_ob,    indent=True)
-    fl += _tr("Donations Received",  inner=i06_cr,    indent=True)
-    fl += _tr("Expenditure Made",    inner=-e07_dr,   indent=True)
-    fl += _tr("",                    outer=l02_closing, top_line=True)
+    # Renovation Fund — static balance (movements are in I&E Statement)
+    fl += _tr("Renovation Fund", outer=l02_closing, bold=True)
 
     fl += _spacer()
 
-    # Non-Corpus Fund
-    ie_label = "Surplus" if l03_movement >= 0 else "Deficit"
+    # Non-Corpus Fund — adjusted for full I&E surplus/deficit (auditor's format)
     fl += _tr("Non-Corpus Fund", bold=True)
-    fl += _tr("Opening Balance", inner=l03_ob,        indent=True)
-    fl += _tr(ie_label,          inner=l03_movement,  indent=True)
-    fl += _tr("",                outer=l03_closing,   top_line=True)
+    fl += _tr("Opening Balance",                inner=l03_ob,      indent=True)
+    fl += _tr(f"{ie_label} from I&E Statement", inner=ie_surplus,  indent=True)
+    fl += _tr("",                               outer=l03_closing,  top_line=True)
 
     # Liabilities — only show if non-zero
     if abs(l04_cr) > 0.005 or abs(l05_cr) > 0.005:
@@ -245,21 +243,21 @@ def render(conn):
 
     # ── Download CSV ──────────────────────────────────────────────────────────
     csv_rows = [
-        ("Corpus Fund — Opening Balance",        l01_ob,       "Fund"),
-        ("Corpus Fund — Contributions",           l01_contrib,  "Fund"),
-        ("Corpus Fund — Closing Balance",         l01_cr,       "Fund"),
-        ("Renovation Fund — Opening Balance",     l02_ob,       "Fund"),
-        ("Renovation Fund — Donations Received",  i06_cr,       "Fund"),
-        ("Renovation Fund — Expenditure Made",    -e07_dr,      "Fund"),
-        ("Renovation Fund — Closing Balance",     l02_closing,  "Fund"),
-        ("Non-Corpus Fund — Opening Balance",     l03_ob,       "Fund"),
-        (f"Non-Corpus Fund — {ie_label}",         l03_movement, "Fund"),
-        ("Non-Corpus Fund — Closing Balance",     l03_closing,  "Fund"),
-        ("Cash in Hand",                          a01,          "Asset"),
-        ("Cash at Bank — Savings Account",        a02,          "Asset"),
-        ("Cash at Bank — Fixed Deposit",          a03,          "Asset"),
-        ("Accrued Interest on Fixed Deposits",    a04,          "Asset"),
-        ("Advance to Priest — Manikandan",        a05,          "Asset"),
+        ("Corpus Fund — Opening Balance",                  l01_ob,      "Fund"),
+        ("Corpus Fund — Contributions",                    l01_contrib,  "Fund"),
+        ("Corpus Fund — Closing Balance",                  l01_cr,       "Fund"),
+        ("Renovation Fund — Balance",                      l02_closing,  "Fund"),
+        ("Non-Corpus Fund — Opening Balance",              l03_ob,       "Fund"),
+        (f"Non-Corpus Fund — {ie_label} from I&E",        ie_surplus,   "Fund"),
+        ("Non-Corpus Fund — Closing Balance",              l03_closing,  "Fund"),
+        ("I&E — Total Income",                             total_income, "I&E"),
+        ("I&E — Total Expenditure",                        total_exp,    "I&E"),
+        (f"I&E — {ie_label}",                              ie_surplus,   "I&E"),
+        ("Cash in Hand",                                   a01,          "Asset"),
+        ("Cash at Bank — Savings Account",                 a02,          "Asset"),
+        ("Cash at Bank — Fixed Deposit",                   a03,          "Asset"),
+        ("Accrued Interest on Fixed Deposits",             a04,          "Asset"),
+        ("Advance to Priest — Manikandan",                 a05,          "Asset"),
     ]
     if abs(l04_cr) > 0.005:
         csv_rows.append(("Advance from Trustee", l04_cr, "Liability"))
