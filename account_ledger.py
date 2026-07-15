@@ -19,15 +19,10 @@ def render(conn):
 
     # ── Load accounts list ──────────────────────────────────────────────────
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT a.id, a.code || ' — ' || a.name AS label
-                FROM accounts a
-                ORDER BY a.id
-                """
-            )
-            account_rows = cur.fetchall()
+        account_rows = conn.run(
+            "SELECT a.id, a.code || ' — ' || a.name AS label "
+            "FROM accounts a ORDER BY a.id"
+        )
     except Exception as e:
         st.error(f"Database error loading accounts: {e}")
         return
@@ -75,17 +70,16 @@ def render(conn):
             le.debit_amount,
             le.credit_amount
         FROM ledger_entries le
-        WHERE le.fy = %s
-          AND le.account_id = %s
-          AND le.entry_date BETWEEN %s AND %s
+        WHERE le.fy = :fy
+          AND le.account_id = :account_id
+          AND le.entry_date BETWEEN :date_from AND :date_to
         ORDER BY le.entry_date, le.id
     """
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (fy, account_id, date_from, date_to))
-            rows = cur.fetchall()
-            cols = [d[0] for d in cur.description]
+        rows = conn.run(sql, fy=fy, account_id=account_id,
+                        date_from=date_from, date_to=date_to)
+        cols = [c["name"] for c in conn.columns]
     except Exception as e:
         st.error(f"Database error: {e}")
         return
@@ -100,15 +94,14 @@ def render(conn):
     ob_sql = """
         SELECT COALESCE(SUM(debit_amount) - SUM(credit_amount), 0) AS opening_net
         FROM ledger_entries
-        WHERE fy = %s
-          AND account_id = %s
-          AND entry_date < %s
+        WHERE fy = :fy
+          AND account_id = :account_id
+          AND entry_date < :date_from
     """
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(ob_sql, (fy, account_id, date_from))
-            opening_net = cur.fetchone()[0] or 0.0
+        ob_rows = conn.run(ob_sql, fy=fy, account_id=account_id, date_from=date_from)
+        opening_net = float(ob_rows[0][0]) if ob_rows else 0.0
     except Exception as e:
         st.error(f"Error loading opening balance: {e}")
         return

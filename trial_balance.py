@@ -7,7 +7,6 @@ Usage: call render(conn) from the main app.py tab.
 
 import streamlit as st
 import pandas as pd
-import psycopg2
 
 
 def render(conn):
@@ -28,16 +27,14 @@ def render(conn):
         FROM accounts a
         LEFT JOIN ledger_entries le
                ON le.account_id = a.id
-              AND le.fy = %s
+              AND le.fy = :fy
         GROUP BY a.id, a.code, a.name, a.type
         ORDER BY a.id
     """
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (fy,))
-            rows = cur.fetchall()
-            cols = [d[0] for d in cur.description]
+        rows = conn.run(sql, fy=fy)
+        cols = [c["name"] for c in conn.columns]
     except Exception as e:
         st.error(f"Database error: {e}")
         return
