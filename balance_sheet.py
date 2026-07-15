@@ -94,6 +94,9 @@ def render(conn):
     st.divider()
 
     # ── Single SQL: all values in one round-trip ───────────────────────────────
+    # NOTE: No batch_id filters — accounts 11 (L-01), 12 (L-02), 31 (L-03)
+    # have ONLY their opening-balance entries in ledger_entries for FY 2025-26.
+    # Filtering by batch_id was triggering a pg8000 column-displacement bug.
     sql = """
         SELECT
             -- ── Assets ────────────────────────────────────────────────────
@@ -108,25 +111,22 @@ def render(conn):
             COALESCE(SUM(CASE WHEN account_id = 36
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS a05,
 
-            -- ── Corpus Fund (L-01) ─────────────────────────────────────────
+            -- ── Corpus Fund (L-01): total FY balance = opening (no new contributions) ─
             COALESCE(SUM(CASE WHEN account_id = 11
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS l01_cr,
-            COALESCE(SUM(CASE WHEN account_id = 11
-                AND batch_id = 'OB-FY2526'
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS l01_ob,
 
-            -- ── Renovation Fund (L-02) ─────────────────────────────────────
+            -- ── Renovation Fund (L-02): opening balance (only OB entry exists) ────────
             COALESCE(SUM(CASE WHEN account_id = 12
-                AND batch_id = 'OB-FY2526'
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS l02_ob,
+
+            -- ── Renovation Fund movements ──────────────────────────────────
             COALESCE(SUM(CASE WHEN account_id = 10
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS i06_cr,
             COALESCE(SUM(CASE WHEN account_id = 19
                 THEN debit_amount - credit_amount ELSE 0 END), 0) AS e07_dr,
 
-            -- ── Non-Corpus Fund opening (L-03) ─────────────────────────────
+            -- ── Non-Corpus Fund (L-03): opening balance (only OB entry exists) ─────────
             COALESCE(SUM(CASE WHEN account_id = 31
-                AND batch_id = 'OB-FY2526'
                 THEN credit_amount - debit_amount ELSE 0 END), 0) AS l03_ob,
 
             -- ── Liabilities ────────────────────────────────────────────────
@@ -150,13 +150,16 @@ def render(conn):
 
     r = rows[0]
     (a01, a02, a03, a04, a05,
-     l01_cr, l01_ob,
+     l01_cr,
      l02_ob, i06_cr, e07_dr,
      l03_ob,
      l04_cr, l05_cr) = [float(x) for x in r]
 
     # ── Derived values ────────────────────────────────────────────────────────
-    l01_contrib  = l01_cr - l01_ob                   # New Corpus contributions this FY
+    # l01_cr = opening + contributions; since no new Corpus donations in FY 2025-26,
+    # l01_ob = l01_cr and l01_contrib = 0.
+    l01_ob       = l01_cr                            # Account 11 has only OB entry
+    l01_contrib  = 0.0                               # No new Corpus donations this FY
     l02_closing  = l02_ob + i06_cr - e07_dr          # Renovation Fund closing balance
 
     total_assets = a01 + a02 + a03 + a04 + a05

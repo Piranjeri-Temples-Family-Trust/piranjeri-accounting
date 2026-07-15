@@ -143,15 +143,23 @@ if not st.session_state.logged_in:
 st.session_state.last_active = datetime.now()
 
 # ── DB connection ─────────────────────────────────────────────────────────────
-@st.cache_resource
+# Per-session connection (stored in st.session_state) — avoids the pg8000
+# shared-connection bug where sequential conn.run() calls across pages
+# return stale results from the previous query's buffer.
 def get_connection():
-    dsn = st.secrets["neon"]["dsn"]
-    p = urlparse(dsn)
-    return pg8000.native.Connection(
-        user=p.username, password=p.password,
-        host=p.hostname, port=p.port or 5432,
-        database=p.path.lstrip("/"), ssl_context=True,
-    )
+    if st.session_state.get("conn") is None:
+        try:
+            dsn = st.secrets["neon"]["dsn"]
+            p = urlparse(dsn)
+            st.session_state.conn = pg8000.native.Connection(
+                user=p.username, password=p.password,
+                host=p.hostname, port=p.port or 5432,
+                database=p.path.lstrip("/"), ssl_context=True,
+            )
+        except Exception as e:
+            st.error(f"Database connection failed: {e}")
+            st.stop()
+    return st.session_state.conn
 
 conn = get_connection()
 
@@ -222,15 +230,9 @@ with st.sidebar:
     # ── Footer: clock + logout ─────────────────────────────────────────────────
     now = datetime.now()
 
-    # Clock widget — simple, always visible
-    st.markdown(
-        f"<div style='text-align:right; font-family:monospace; font-weight:700; "
-        f"font-size:0.85rem; color:#c7d2fe; letter-spacing:1px; margin-bottom:1px;'"
-        f">{now.strftime('%H:%M')}</div>"
-        f"<div style='text-align:right; font-size:0.65rem; color:#94a3b8;'"
-        f">{now.strftime('%d/%m/%Y')} · {st.session_state.user}</div>",
-        unsafe_allow_html=True,
-    )
+    # Clock — Streamlit native (always renders, no HTML filtering issues)
+    st.write(f"🕐 **{now.strftime('%H:%M')}**")
+    st.caption(f"📅 {now.strftime('%d/%m/%Y')}  👤 {st.session_state.get('user', '')}")
 
     # Logout button — small, left side
     st.markdown("<div class='logout-btn'>", unsafe_allow_html=True)
@@ -238,6 +240,7 @@ with st.sidebar:
         st.session_state.logged_in = False
         st.session_state.user = None
         st.session_state.last_active = None
+        st.session_state.conn = None   # close connection on logout
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
