@@ -64,7 +64,7 @@ SESSION_TIMEOUT_MINUTES = 30
 # ── Session state ─────────────────────────────────────────────────────────────
 for key, val in [
     ("logged_in", False), ("user", None),
-    ("last_active", None), ("page", "trial_balance"),
+    ("last_active", None), ("page", "journal"),
     ("fin_expanded", False),
 ]:
     if key not in st.session_state:
@@ -83,7 +83,7 @@ if not st.session_state.logged_in:
     with col:
         st.markdown("<h2 style='text-align:center'>🪔</h2>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align:center'>Piranjeri Temples Family Trust</h3>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align:center;color:#888'>Accounting System</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align:center;color:#888'>Financial Accounting System</p>", unsafe_allow_html=True)
         st.divider()
         with st.form("login_form"):
             username = st.text_input("Username")
@@ -153,12 +153,25 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.fin_expanded or fin_active:
+        st.markdown("""
+        <style>
+        div[data-testid="stSidebar"] .fin-sub button {
+            font-size: 0.78rem !important;
+            padding: 0.2rem 0.5rem 0.2rem 1.4rem !important;
+            min-height: 0 !important;
+            height: auto !important;
+            line-height: 1.4 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
         for key, label in fin_pages.items():
             active = st.session_state.page == key
-            prefix = "  ▶ " if active else "      "
+            prefix = "▶ " if active else "· "
+            st.markdown("<div class='fin-sub'>", unsafe_allow_html=True)
             if st.button(f"{prefix}{label}", key=f"nav_{key}", use_container_width=True):
                 st.session_state.page = key
                 st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Spacer ────────────────────────────────────────────────────────────────
     st.markdown("<div style='flex:1'></div>", unsafe_allow_html=True)
@@ -181,12 +194,18 @@ with st.sidebar:
 
     with col_right:
         st.markdown(f"""
-        <div style='text-align:right; line-height:1.5; padding-top:2px'>
-            <span style='font-size:1.1rem; font-weight:700; font-family:monospace'>
+        <div style='text-align:right; line-height:1.25; padding-top:3px;
+                    background:#1a1a2e; border-radius:6px; padding:6px 8px;'>
+            <div style='font-size:1.15rem; font-weight:700; font-family:Segoe UI,monospace;
+                        letter-spacing:1px; color:#e8e8e8;'>
                 {now.strftime('%H:%M')}
-            </span><br>
-            <span style='font-size:0.72rem; color:#bbb'>{now.strftime('%d %b %Y')}</span><br>
-            <span style='font-size:0.72rem; color:#6366f1'>👤 {st.session_state.user}</span>
+            </div>
+            <div style='font-size:0.68rem; color:#aaa; margin-top:1px;'>
+                {now.strftime('%d/%m/%Y')}
+            </div>
+            <div style='font-size:0.68rem; color:#7c8cf8; margin-top:2px;'>
+                {st.session_state.user}
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
