@@ -190,6 +190,8 @@ with st.sidebar:
     nav_btn("📒  Account Ledger", "account_ledger")
     nav_btn("⚖️  Trial Balance", "trial_balance")
     nav_btn("📖  Journal Book", "journal_book")
+    nav_btn("🏦  Bank Statement", "bank_statement")
+    nav_btn("🔧  Edit / Void", "edit_void")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
@@ -254,6 +256,8 @@ if page == "journal":
     # Hide the legacy tab strip from expense_entry.py — sidebar nav handles navigation now
     st.markdown("""
     <style>
+    [data-testid="stTabBar"],
+    div[role="tablist"],
     [data-testid="stTabs"] > div:first-child { display: none !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -317,4 +321,22 @@ elif page == "fpnl":
     except Exception as e:
         import traceback
         st.error(f"Festival P&L error: {e}")
+        st.code(traceback.format_exc())
+
+elif page == "bank_statement":
+    try:
+        import bank_statement
+        bank_statement.render(st.session_state.user)
+    except Exception as e:
+        import traceback
+        st.error(f"Bank Statement error: {e}")
+        st.code(traceback.format_exc())
+
+elif page == "edit_void":
+    try:
+        import edit_void
+        edit_void.render(st.session_state.user)
+    except Exception as e:
+        import traceback
+        st.error(f"Edit/Void error: {e}")
         st.code(traceback.format_exc())
