@@ -687,6 +687,31 @@ def render_expense_entry(user: str):
     fs_by_id   = {f["id"]: f for f in fs_list}
     mh_by_id   = {m["id"]: m for m in mh_list}
 
+    # ── Account key constants ──────────────────────────────────────────────────
+    MANI = "__MANIKANDAN__"
+    CASH = "__CASH__"
+    BANK = "__BANK__"
+
+    # Pre-build id lookups (key → db id)
+    mh_by_key = {f"mh_{m['id']}": m["id"] for m in mh_list}
+    fs_by_key = {f"fs_{f['id']}": f["id"] for f in fs_list}
+
+    def _acct_opts():
+        keys, labels = [], {}
+        for m in mh_list:
+            k = f"mh_{m['id']}"
+            keys.append(k)
+            labels[k] = f"{m['code']} — {m['name']}"
+        keys += [MANI, CASH, BANK]
+        labels[MANI] = "👤 Manikandan A/C"
+        labels[CASH]  = "💵 Cash A/C"
+        labels[BANK]  = "🏦 Bank A/C (Savings)"
+        for f in fs_list:
+            k = f"fs_{f['id']}"
+            keys.append(k)
+            labels[k] = f"{f['code']} — {f['name']}"
+        return keys, labels
+
     st.markdown("#### 📝 Journal Entry")
     acct_keys, acct_labels = _acct_opts()
 
