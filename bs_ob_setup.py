@@ -71,15 +71,15 @@ def render_ob_setup():
             # Single query: all asset closings + renovation movements + L-04/L-05 net
             result = conn.run("""
                 SELECT
-                    SUM(CASE WHEN account_id = 1  THEN debit - credit ELSE 0 END) AS a01,
-                    SUM(CASE WHEN account_id = 2  THEN debit - credit ELSE 0 END) AS a02,
-                    SUM(CASE WHEN account_id = 3  THEN debit - credit ELSE 0 END) AS a03,
-                    SUM(CASE WHEN account_id = 4  THEN debit - credit ELSE 0 END) AS a04,
-                    SUM(CASE WHEN account_id = 36 THEN debit - credit ELSE 0 END) AS a05,
-                    SUM(CASE WHEN account_id = 10 THEN credit - debit ELSE 0 END) AS renov_inc,
-                    SUM(CASE WHEN account_id = 19 THEN debit - credit ELSE 0 END) AS renov_exp,
-                    SUM(CASE WHEN account_id = 34 THEN credit - debit ELSE 0 END) AS l04_net,
-                    SUM(CASE WHEN account_id = 35 THEN credit - debit ELSE 0 END) AS l05_net
+                    SUM(CASE WHEN account_id = 1  THEN debit_amount - credit_amount ELSE 0 END) AS a01,
+                    SUM(CASE WHEN account_id = 2  THEN debit_amount - credit_amount ELSE 0 END) AS a02,
+                    SUM(CASE WHEN account_id = 3  THEN debit_amount - credit_amount ELSE 0 END) AS a03,
+                    SUM(CASE WHEN account_id = 4  THEN debit_amount - credit_amount ELSE 0 END) AS a04,
+                    SUM(CASE WHEN account_id = 36 THEN debit_amount - credit_amount ELSE 0 END) AS a05,
+                    SUM(CASE WHEN account_id = 10 THEN credit_amount - debit_amount ELSE 0 END) AS renov_inc,
+                    SUM(CASE WHEN account_id = 19 THEN debit_amount - credit_amount ELSE 0 END) AS renov_exp,
+                    SUM(CASE WHEN account_id = 34 THEN credit_amount - debit_amount ELSE 0 END) AS l04_net,
+                    SUM(CASE WHEN account_id = 35 THEN credit_amount - debit_amount ELSE 0 END) AS l05_net
                 FROM ledger_entries
                 WHERE fy = :fy
             """, fy=source_fy)

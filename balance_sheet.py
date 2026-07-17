@@ -29,13 +29,13 @@ def render_balance_sheet():
     try:
         rows = conn.run("""
             SELECT
-                SUM(CASE WHEN le.account_id = 1  THEN le.debit - le.credit ELSE 0 END) AS a01,
-                SUM(CASE WHEN le.account_id = 2  THEN le.debit - le.credit ELSE 0 END) AS a02,
-                SUM(CASE WHEN le.account_id = 3  THEN le.debit - le.credit ELSE 0 END) AS a03,
-                SUM(CASE WHEN le.account_id = 4  THEN le.debit - le.credit ELSE 0 END) AS a04,
-                SUM(CASE WHEN le.account_id = 36 THEN le.debit - le.credit ELSE 0 END) AS a05,
-                SUM(CASE WHEN le.account_id = 10 THEN le.credit - le.debit ELSE 0 END) AS i06_cr,
-                SUM(CASE WHEN le.account_id = 19 THEN le.debit - le.credit ELSE 0 END) AS e07_dr,
+                SUM(CASE WHEN le.account_id = 1  THEN le.debit_amount - le.credit_amount ELSE 0 END) AS a01,
+                SUM(CASE WHEN le.account_id = 2  THEN le.debit_amount - le.credit_amount ELSE 0 END) AS a02,
+                SUM(CASE WHEN le.account_id = 3  THEN le.debit_amount - le.credit_amount ELSE 0 END) AS a03,
+                SUM(CASE WHEN le.account_id = 4  THEN le.debit_amount - le.credit_amount ELSE 0 END) AS a04,
+                SUM(CASE WHEN le.account_id = 36 THEN le.debit_amount - le.credit_amount ELSE 0 END) AS a05,
+                SUM(CASE WHEN le.account_id = 10 THEN le.credit_amount - le.debit_amount ELSE 0 END) AS i06_cr,
+                SUM(CASE WHEN le.account_id = 19 THEN le.debit_amount - le.credit_amount ELSE 0 END) AS e07_dr,
                 MAX(ob.l01) AS ob_l01,
                 MAX(ob.l02) AS ob_l02,
                 MAX(ob.l03) AS ob_l03,
