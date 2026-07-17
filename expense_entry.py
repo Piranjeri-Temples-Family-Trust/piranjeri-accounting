@@ -1762,3 +1762,301 @@ def render_expense_entry(user: str):
                         except Exception as ex:
                             st.error(f"Delete failed: {ex}")
                         st.error(f"Delete failed: {ex}")
+
+
+
+
+def render_bank_statement(user: str):
+    """Stand-alone Bank Statement page — called from bank_statement.py."""
+    _css()
+    st.markdown("#### 🏦 Bank Statement — Savings Account")
+
+    _today2 = date.today()
+    _fy_yr2 = _today2.year if _today2.month >= 4 else _today2.year - 1
+    cur_fy2 = f"{_fy_yr2}-{str(_fy_yr2+1)[2:]}"
+
+    # FY selector — show previous FY first (has audited opening balance)
+    prev_fy2 = f"{_fy_yr2-1}-{str(_fy_yr2)[2:]}"
+    bk_fy_opts = [prev_fy2, cur_fy2]
+    bk_fy = st.selectbox("Financial Year", bk_fy_opts, key="bk_fy")
+
+    # Derive date range for selected FY
+    bk_yr = int(bk_fy[:4])
+    bk_d_from = date(bk_yr, 4, 1)
+    bk_d_to   = date(bk_yr+1, 3, 31) if _today2 > date(bk_yr+1, 3, 31) else _today2
+
+    bk1, bk2 = st.columns(2)
+    with bk1: bk_from = st.date_input("From", value=bk_d_from, key="bk_from")
+    with bk2: bk_to   = st.date_input("To",   value=bk_d_to,   key="bk_to")
+
+    if st.button("📊 Generate Bank Statement", type="primary", key="bk_load"):
+        ob, ob_err = _bank_opening(bk_fy)
+        if ob_err:
+            st.error(f"Database error: {ob_err}")
+        elif ob is None:
+            st.warning(
+                f"⚠️ No opening balance found for FY {bk_fy}. "
+                f"Run `bank_setup.sql` in Neon SQL Editor to add the {bk_fy} opening balance."
+            )
+        else:
+            ob_savings = float(ob["savings_balance"])
+            ob_fd      = float(ob["fixed_deposit_balance"])
+            ob_cash    = float(ob["cash_balance"])
+
+            # Opening balance cards
+            st.markdown(f"""
+            <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+              <div style="background:#1e40af;color:white;border-radius:8px;
+                          padding:.8rem 1.2rem;flex:1;min-width:160px">
+                <div style="font-size:.7rem;opacity:.8">OPENING SAVINGS BALANCE</div>
+                <div style="font-size:1.3rem;font-weight:700">₹{ob_savings:,.2f}</div>
+                <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+              </div>
+              <div style="background:#0d9488;color:white;border-radius:8px;
+                          padding:.8rem 1.2rem;flex:1;min-width:160px">
+                <div style="font-size:.7rem;opacity:.8">FIXED DEPOSIT</div>
+                <div style="font-size:1.3rem;font-weight:700">₹{ob_fd:,.2f}</div>
+                <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+              </div>
+              <div style="background:#7c3aed;color:white;border-radius:8px;
+                          padding:.8rem 1.2rem;flex:1;min-width:160px">
+                <div style="font-size:.7rem;opacity:.8">CASH IN HAND</div>
+                <div style="font-size:1.3rem;font-weight:700">₹{ob_cash:,.2f}</div>
+                <div style="font-size:.7rem;opacity:.7">as at {ob['as_at'].strftime('%d %b %Y')}</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            if ob.get("notes"):
+                st.caption(f"Source: {ob['notes']}")
+
+            movements = _bank_movements(bk_from, bk_to)
+
+            if not movements:
+                st.info("No bank transactions for this period.")
+            else:
+                running = ob_savings
+                total_cr = total_dr = 0.0
+                rows_html = ""
+                for r in movements:
+                    cr = float(r["credit"])
+                    dr = float(r["debit"])
+                    running = running + cr - dr
+                    total_cr += cr
+                    total_dr += dr
+                    dt = r["dt"].strftime("%d %b %Y") if hasattr(r["dt"],"strftime") else str(r["dt"])
+                    src_badge = {
+                        "INCOME":  "<span style='background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px;font-size:.72rem'>Fund</span>",
+                        "RECEIPT": "<span style='background:#ccfbf1;color:#0d9488;padding:1px 5px;border-radius:3px;font-size:.72rem'>Receipt</span>",
+                        "EXPENSE": "<span style='background:#fee2e2;color:#991b1b;padding:1px 5px;border-radius:3px;font-size:.72rem'>Expense</span>",
+                    }.get(r.get("src",""), "")
+                    cr_cell = f"<td style='text-align:right;padding:5px 8px;color:#166534'>₹{cr:,.2f}</td>" if cr else "<td style='padding:5px 8px'></td>"
+                    dr_cell = f"<td style='text-align:right;padding:5px 8px;color:#991b1b'>₹{dr:,.2f}</td>" if dr else "<td style='padding:5px 8px'></td>"
+                    rows_html += (
+                        f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                        f"<td style='padding:5px 8px'>{dt}</td>"
+                        f"<td style='padding:5px 8px'>{r.get('narration','')[:55]}</td>"
+                        f"<td style='padding:5px 8px'>{src_badge}</td>"
+                        f"<td style='padding:5px 8px;color:#64748b;font-size:.78rem'>{(r.get('mode') or '').replace('_',' ')}</td>"
+                        f"{cr_cell}{dr_cell}"
+                        f"<td style='text-align:right;font-weight:600;padding:5px 8px'>₹{running:,.2f}</td>"
+                        f"</tr>"
+                    )
+
+                foot = (f"<tfoot><tr style='font-weight:700;background:#f0fdf4'>"
+                        f"<td colspan='4' style='padding:6px 8px'>CLOSING BALANCE</td>"
+                        f"<td style='text-align:right;padding:6px 8px;color:#166534'>₹{total_cr:,.2f}</td>"
+                        f"<td style='text-align:right;padding:6px 8px;color:#991b1b'>₹{total_dr:,.2f}</td>"
+                        f"<td style='text-align:right;padding:6px 8px'>₹{running:,.2f}</td>"
+                        f"</tr></tfoot>")
+                st.markdown(f"""
+                <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+                <thead><tr style="background:#1e40af;color:white">
+                  <th style="padding:6px 8px">Date</th>
+                  <th style="padding:6px 8px">Narration</th>
+                  <th style="padding:6px 8px">Type</th>
+                  <th style="padding:6px 8px">Mode</th>
+                  <th style="text-align:right;padding:6px 8px">Credit ₹</th>
+                  <th style="text-align:right;padding:6px 8px">Debit ₹</th>
+                  <th style="text-align:right;padding:6px 8px">Balance ₹</th>
+                </tr></thead>
+                <tbody>{rows_html}</tbody>
+                {foot}
+                </table>
+                """, unsafe_allow_html=True)
+
+                # Summary cards
+                net = total_cr - total_dr
+                st.markdown(f"""
+                <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.8rem">
+                  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
+                              padding:.7rem 1rem;flex:1;min-width:140px">
+                    <div style="font-size:.7rem;color:#64748b">OPENING</div>
+                    <div style="font-weight:700">₹{ob_savings:,.2f}</div>
+                  </div>
+                  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
+                              padding:.7rem 1rem;flex:1;min-width:140px">
+                    <div style="font-size:.7rem;color:#64748b">TOTAL CREDITS</div>
+                    <div style="font-weight:700;color:#166534">₹{total_cr:,.2f}</div>
+                  </div>
+                  <div style="background:#fff5f5;border:1px solid #fecaca;border-radius:8px;
+                              padding:.7rem 1rem;flex:1;min-width:140px">
+                    <div style="font-size:.7rem;color:#64748b">TOTAL DEBITS</div>
+                    <div style="font-weight:700;color:#991b1b">₹{total_dr:,.2f}</div>
+                  </div>
+                  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+                              padding:.7rem 1rem;flex:1;min-width:140px">
+                    <div style="font-size:.7rem;color:#64748b">CLOSING BALANCE</div>
+                    <div style="font-weight:700;color:#1e40af">₹{running:,.2f}</div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                csv_data = _bank_csv(movements, ob_savings, bk_from, bk_to)
+                st.download_button("⬇️ Download CSV",
+                                   data=csv_data,
+                                   file_name=f"Bank_Statement_{bk_fy}_{bk_from.strftime('%Y%m%d')}.csv",
+                                   mime="text/csv")
+
+        # ═══════════════════════════════════════════════════════════
+        # TAB 5 — Edit / Void
+        # ═══════════════════════════════════════════════════════════
+
+
+def render_edit_void(user: str):
+    """Stand-alone Edit/Void page — called from edit_void.py."""
+    _css()
+    st.markdown("#### 🔧 Edit or Void an Expense")
+
+    fs_list   = _fund_sources()
+    fest_list = _festivals()
+    mh_list   = _major_heads()
+
+    cur_fy = _fy(date.today())
+    yr = int(cur_fy[:4])
+    fy_opts = [cur_fy, f"{yr-1}-{str(yr)[2:]}"]
+
+    ec1, ec2 = st.columns([1, 3])
+    with ec1: ev_fy = st.selectbox("FY", fy_opts, key="ev_fy")
+    with ec2: ev_q  = st.text_input("Search description or ID",
+                                     key="ev_q", placeholder="e.g. flowers  or  42")
+
+    if st.button("🔍 Search", key="ev_search"):
+        st.session_state.ev_results = _search_expenses(ev_fy, ev_q.strip())
+        st.session_state.ev_sel = None
+
+    results_ev = st.session_state.get("ev_results")
+    if results_ev is not None:
+        if not results_ev:
+            st.info("No entries found.")
+        else:
+            rows_html = ""
+            for r in results_ev:
+                rows_html += (f"<tr style='border-bottom:1px solid #e2e8f0'>"
+                              f"<td style='padding:5px 8px'>#{r['id']}</td>"
+                              f"<td style='padding:5px 8px'>{r['txn_date'].strftime('%d %b %Y')}</td>"
+                              f"<td style='padding:5px 8px'>{r['fund_code']}</td>"
+                              f"<td style='padding:5px 8px'>{r['mh_code']}</td>"
+                              f"<td style='text-align:right;padding:5px 8px'>₹{float(r['amount']):,.2f}</td>"
+                              f"<td style='padding:5px 8px'>{(r.get('description') or '')[:40]}</td>"
+                              f"</tr>")
+            st.markdown(f"""
+            <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+            <thead><tr style="background:#1e40af;color:white">
+              <th style="padding:6px 8px">ID</th><th style="padding:6px 8px">Date</th>
+              <th style="padding:6px 8px">Fund</th><th style="padding:6px 8px">Head</th>
+              <th style="text-align:right;padding:6px 8px">Amount</th>
+              <th style="padding:6px 8px">Description</th>
+            </tr></thead>
+            <tbody>{rows_html}</tbody>
+            </table>
+            """, unsafe_allow_html=True)
+            st.caption(f"{len(results_ev)} entries found")
+
+            id_label = {
+                r["id"]: f"#{r['id']} · {r['txn_date'].strftime('%d %b %Y')} · "
+                         f"{r['fund_code']} · ₹{float(r['amount']):,.0f}"
+                for r in results_ev
+            }
+            sel_id = st.selectbox("Select entry to edit / void",
+                options=[None] + list(id_label.keys()),
+                format_func=lambda x: "— pick a row —" if x is None else id_label[x],
+                key="ev_sel")
+
+            if sel_id:
+                sel = next(r for r in results_ev if r["id"] == sel_id)
+                st.markdown("---")
+                st.markdown(f"**Editing #{sel['id']}** &nbsp;·&nbsp; entered by `{sel['entered_by']}`")
+                with st.form("edit_form"):
+                    fe1, fe2, fe3 = st.columns([1.1, 0.9, 1.4])
+                    with fe1: e_date = st.date_input("Date", value=sel["txn_date"])
+                    with fe2:
+                        modes = ["CASH","CHEQUE","BANK_TRANSFER"]
+                        e_mode = st.selectbox("Mode", modes,
+                            index=modes.index(sel["payment_mode"] or "CASH"),
+                            format_func=lambda x: {"CASH":"Cash","CHEQUE":"Cheque",
+                                                   "BANK_TRANSFER":"Bank Tfr"}[x])
+                    with fe3:
+                        fs_opts_e = {f["id"]: f"{f['code']} — {f['name']}" for f in fs_list}
+                        fs_keys_e = list(fs_opts_e.keys())
+                        e_fs = st.selectbox("Fund", fs_keys_e,
+                            index=fs_keys_e.index(sel["fund_source_id"])
+                                  if sel["fund_source_id"] in fs_keys_e else 0,
+                            format_func=lambda x: fs_opts_e[x])
+
+                    fe4, fe5 = st.columns([2, 1])
+                    with fe4:
+                        mh_opts_e = {m["id"]: f"{m['code']} — {m['name']}" for m in mh_list}
+                        mh_keys_e = list(mh_opts_e.keys())
+                        e_mh = st.selectbox("Head", mh_keys_e,
+                            index=mh_keys_e.index(sel["major_head_id"])
+                                  if sel["major_head_id"] in mh_keys_e else 0,
+                            format_func=lambda x: mh_opts_e[x])
+                    with fe5:
+                        e_amt = st.number_input("Amount", min_value=1.0,
+                            value=float(sel["amount"]), step=50.0, format="%.2f")
+
+                    ff_e = [f for f in fest_list if f["fund_source_id"] == e_fs]
+                    fo_e = {None: "— General —"} | {f["id"]: f["name"] for f in ff_e}
+                    fk_e = list(fo_e.keys())
+                    e_fest = st.selectbox("Festival", fk_e,
+                        index=fk_e.index(sel["festival_id"])
+                              if sel["festival_id"] in fk_e else 0,
+                        format_func=lambda x: fo_e[x])
+
+                    e_chq = None
+                    if e_mode == "CHEQUE":
+                        e_chq = st.text_input("Cheque No.",
+                            value=sel.get("cheque_no") or "", max_chars=30) or None
+                    e_desc = st.text_input("Description",
+                        value=sel.get("description") or "", max_chars=60) or None
+                    e_paid = st.text_input("Paid To",
+                        value=sel.get("paid_to") or "", max_chars=50) or None
+
+                    b1, b2 = st.columns([3, 1])
+                    with b1: do_save = st.form_submit_button("💾 Save Changes", type="primary")
+                    with b2: do_void = st.form_submit_button("🗑️ Delete", type="secondary")
+
+                if do_save:
+                    try:
+                        _update_expense(sel_id, {
+                            "txn_date": e_date, "fund_source_id": e_fs,
+                            "festival_id": e_fest, "major_head_id": e_mh,
+                            "amount": float(e_amt), "payment_mode": e_mode,
+                            "cheque_no": e_chq, "description": e_desc, "paid_to": e_paid
+                        })
+                        st.success(f"✅ Entry #{sel_id} updated.")
+                        st.session_state.ev_results = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Save failed: {ex}")
+
+                if do_void:
+                    try:
+                        _void_expense(sel_id)
+                        st.success(f"✅ Entry #{sel_id} deleted.")
+                        st.session_state.ev_results = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Delete failed: {ex}")
