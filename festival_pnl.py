@@ -118,5 +118,29 @@ def render(conn):
     st.markdown("</div>", unsafe_allow_html=True)
 
     csv = sdf.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download Festival P&L (CSV)", csv,
-                       "festival_pnl_FY2526.csv", "text/csv")
+
+    # ── Download buttons ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Download Report**")
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button("⬇ CSV", csv,
+                           f"festival_pnl_{fy.replace('-', '')}.csv", "text/csv")
+    with dl2:
+        try:
+            from report_pdf import festival_pnl_pdf
+            pdf_bytes = festival_pnl_pdf(fy, summary_rows)
+            st.download_button("📄 PDF", pdf_bytes,
+                               f"festival_pnl_{fy.replace('-', '')}.pdf",
+                               "application/pdf")
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
+    with dl3:
+        try:
+            from report_excel import festival_pnl_xlsx
+            xlsx_bytes = festival_pnl_xlsx(fy, summary_rows)
+            st.download_button("📊 Excel", xlsx_bytes,
+                               f"festival_pnl_{fy.replace('-', '')}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.caption(f"Excel unavailable: {e}")

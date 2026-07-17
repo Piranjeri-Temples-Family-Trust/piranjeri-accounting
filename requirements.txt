@@ -1,2 +1,5 @@
 streamlit
 pg8000
+pandas
+reportlab
+openpyxl

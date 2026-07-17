@@ -267,7 +267,7 @@ def render(conn):
         "Bank interest (SB + FD) is shown separately as Interest Income."
     )
 
-    # ── Download CSV ───────────────────────────────────────────────────────────
+    # ── Download buttons ───────────────────────────────────────────────────────
     csv_rows = [
         ("Nithya Pooja Donations",         i01,             "Income"),
         ("Aadi Pooram Donations",          i_aadi,          "Income"),
@@ -294,7 +294,39 @@ def render(conn):
     ]
     csv = (pd.DataFrame(csv_rows, columns=["Description", "Amount (₹)", "Category"])
              .to_csv(index=False).encode("utf-8"))
-    st.download_button(
-        "⬇ Download I&E Statement (CSV)", csv,
-        f"ie_statement_{fy.replace('-', '')}.csv", "text/csv"
-    )
+
+    ie_data = {
+        "i01": i01, "i02": i02, "i03": i03, "i04": i04, "i05": i05,
+        "i_aadi": i_aadi, "i_sb": i_sb, "i_fd": i_fd,
+        "e01": e01, "e02": e02, "e03": e03, "e04": e04, "e05": e05, "e06": e06,
+        "e08": e08, "e09": e09,
+        "total_income": total_income, "total_exp": total_exp,
+        "ie_result": ie_result, "grand_total": grand_total,
+        "surplus_label": surplus_label, "balancing_amt": balancing_amt,
+    }
+    year_end_str = date_to.strftime("%d %B %Y")
+
+    st.markdown("---")
+    st.markdown("**Download Report**")
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button("⬇ CSV", csv,
+                           f"ie_statement_{fy.replace('-', '')}.csv", "text/csv")
+    with dl2:
+        try:
+            from report_pdf import ie_statement_pdf
+            pdf_bytes = ie_statement_pdf(fy, year_end_str, ie_data)
+            st.download_button("📄 PDF", pdf_bytes,
+                               f"ie_statement_{fy.replace('-', '')}.pdf",
+                               "application/pdf")
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
+    with dl3:
+        try:
+            from report_excel import ie_statement_xlsx
+            xlsx_bytes = ie_statement_xlsx(fy, year_end_str, ie_data)
+            st.download_button("📊 Excel", xlsx_bytes,
+                               f"ie_statement_{fy.replace('-', '')}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.caption(f"Excel unavailable: {e}")

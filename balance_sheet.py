@@ -171,3 +171,53 @@ def render_balance_sheet():
             f"Funds+Liabilities {fmt(total_fl)} ≠ Assets {fmt(total_assets)}. "
             "Contact administrator."
         )
+
+    # ── Download buttons ──────────────────────────────────────────
+    bs_data = {
+        "a01": a01, "a02": a02, "a03": a03, "a04": a04, "a05": a05,
+        "l01": l01, "l02": l02, "l03": l03, "l04": l04, "l05": l05,
+        "ob_l01": ob_l01, "ob_l02": ob_l02, "ob_l03": ob_l03,
+        "i06_cr": i06_cr, "e07_dr": e07_dr,
+        "total_assets": total_assets, "total_fl": total_fl,
+    }
+    st.markdown("**Download Report**")
+    dl1, dl2, dl3 = st.columns(3)
+
+    import pandas as pd
+    csv_rows = [
+        ("Cash in Hand",              "Asset",       a01),
+        ("Cash at Bank — IOB Savings","Asset",       a02),
+        ("Fixed Deposits",            "Asset",       a03),
+        ("Accrued Interest on FD",    "Asset",       a04),
+        ("Advance to Priest",         "Asset",       a05),
+        ("Total Assets",              "",            total_assets),
+        ("Corpus Fund",               "Fund",        l01),
+        ("Renovation Fund",           "Fund",        l02),
+        ("Non-Corpus Fund",           "Fund",        l03),
+        ("Loan from Trustees",        "Liability",   l04),
+        ("Audit Fees Payable",        "Liability",   l05),
+        ("Total Funds & Liabilities", "",            total_fl),
+    ]
+    csv_bytes = (pd.DataFrame(csv_rows, columns=["Item", "Category", "Amount (Rs.)"])
+                   .to_csv(index=False).encode("utf-8"))
+    with dl1:
+        st.download_button("⬇ CSV", csv_bytes,
+                           f"balance_sheet_{fy.replace('-', '')}.csv", "text/csv")
+    with dl2:
+        try:
+            from report_pdf import balance_sheet_pdf
+            pdf_bytes = balance_sheet_pdf(fy, bs_data)
+            st.download_button("📄 PDF", pdf_bytes,
+                               f"balance_sheet_{fy.replace('-', '')}.pdf",
+                               "application/pdf")
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
+    with dl3:
+        try:
+            from report_excel import balance_sheet_xlsx
+            xlsx_bytes = balance_sheet_xlsx(fy, bs_data)
+            st.download_button("📊 Excel", xlsx_bytes,
+                               f"balance_sheet_{fy.replace('-', '')}.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.caption(f"Excel unavailable: {e}")

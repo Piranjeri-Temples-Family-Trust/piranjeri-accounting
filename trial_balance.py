@@ -149,13 +149,40 @@ def render(conn):
     else:
         st.error(f"⚠️ Out of balance by ₹{diff:,.2f}")
 
-    # Download button
+    # ── Download buttons ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**Download Report**")
     download_df = df[["code", "name", "account_type", "total_dr", "total_cr", "net"]].copy()
     download_df.columns = ["Code", "Account", "Type", "Total Dr", "Total Cr", "Net"]
     csv = download_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇ Download Trial Balance (CSV)",
-        data=csv,
-        file_name="trial_balance_FY2526.csv",
-        mime="text/csv",
-    )
+
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button(
+            "⬇ CSV", data=csv,
+            file_name=f"trial_balance_{fy.replace('-', '')}.csv", mime="text/csv",
+        )
+    with dl2:
+        try:
+            from report_pdf import trial_balance_pdf
+            pdf_bytes = trial_balance_pdf(fy, df[["code", "name", "account_type",
+                                                   "dr_balance", "cr_balance"]])
+            st.download_button(
+                "📄 PDF", data=pdf_bytes,
+                file_name=f"trial_balance_{fy.replace('-', '')}.pdf",
+                mime="application/pdf",
+            )
+        except Exception as e:
+            st.caption(f"PDF unavailable: {e}")
+    with dl3:
+        try:
+            from report_excel import trial_balance_xlsx
+            xlsx_bytes = trial_balance_xlsx(fy, df[["code", "name", "account_type",
+                                                     "dr_balance", "cr_balance"]])
+            st.download_button(
+                "📊 Excel", data=xlsx_bytes,
+                file_name=f"trial_balance_{fy.replace('-', '')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception as e:
+            st.caption(f"Excel unavailable: {e}")
