@@ -21,9 +21,11 @@ def render_balance_sheet():
         st.error("Database not connected. Please refresh the page.")
         return
 
-    fy = date_fy_selector(conn)
-    if not fy:
+    fy_result = date_fy_selector(conn)
+    if not fy_result:
         return
+    # date_fy_selector returns (start_date, end_date, fy_string) — extract FY string
+    fy = fy_result[2] if isinstance(fy_result, (tuple, list)) else fy_result
 
     # Single query: ledger aggregates + OB from bs_ob_config (LEFT JOIN keeps it one call)
     try:

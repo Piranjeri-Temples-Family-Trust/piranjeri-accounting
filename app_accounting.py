@@ -2,7 +2,7 @@
 import streamlit as st
 import pg8000.native
 from urllib.parse import urlparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from bs_ob_setup import render_ob_setup
 
 st.set_page_config(
@@ -28,14 +28,14 @@ div[data-testid="stSidebar"] .stButton > button {
     text-align: left;
     background: transparent;
     border: none;
-    color: inherit;
+    color: #4A90D9 !important;
     font-size: 0.95rem;
     padding: 0.4rem 0.6rem;
     border-radius: 6px;
     margin-bottom: 2px;
 }
 div[data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(255,255,255,0.08);
+    background: rgba(74,144,217,0.12);
 }
 
 /* Logout button — small */
@@ -173,7 +173,7 @@ with st.sidebar:
         <span style='font-size:1.8rem'>🪔</span><br>
         <span style='font-weight:700; font-size:1rem'>Piranjeri Temples</span><br>
         <span style='font-weight:700; font-size:1rem'>Family Trust</span><br>
-        <span style='font-size:0.78rem; color:#aaa; letter-spacing:1px'>ACCOUNTING SYSTEM</span>
+        <span style='font-size:0.78rem; color:#4A90D9; letter-spacing:1px; font-weight:600'>ACCOUNTING SYSTEM</span>
     </div>
     """, unsafe_allow_html=True)
     st.divider()
@@ -239,10 +239,11 @@ with st.sidebar:
     st.divider()
 
     # ── Footer: clock + logout ─────────────────────────────────────────────────
-    now = datetime.now()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
 
-    # Clock — Streamlit native (always renders, no HTML filtering issues)
-    st.write(f"🕐 **{now.strftime('%H:%M')}**")
+    # Clock in IST — Streamlit native (always renders, no HTML filtering issues)
+    st.write(f"🕐 **{now.strftime('%H:%M')} IST**")
     st.caption(f"📅 {now.strftime('%d/%m/%Y')}  👤 {st.session_state.get('user', '')}")
 
     # Logout button — small, left side
