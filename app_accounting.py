@@ -3,6 +3,7 @@ import streamlit as st
 import pg8000.native
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
+from bs_ob_setup import render_ob_setup
 
 st.set_page_config(
     page_title="Piranjeri Temples Family Trust — Accounting",
@@ -225,6 +226,14 @@ with st.sidebar:
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
+    # ── Year-End Setup (admin only) ───────────────────────────────────────────
+    if st.session_state.get("user") == "admin3":
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+        if st.button("⚙️  Year-End Setup", key="nav_ob_setup", use_container_width=True):
+            st.session_state.page = "ob_setup"
+            st.session_state.fin_expanded = False
+            st.rerun()
+
     # ── Spacer ────────────────────────────────────────────────────────────────
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
     st.divider()
@@ -307,11 +316,19 @@ elif page == "ie":
 
 elif page == "bs":
     try:
-        import balance_sheet
-        balance_sheet.render(conn)
+        from balance_sheet import render_balance_sheet
+        render_balance_sheet()
     except Exception as e:
         import traceback
         st.error(f"Balance Sheet error: {e}")
+        st.code(traceback.format_exc())
+
+elif page == "ob_setup":
+    try:
+        render_ob_setup()
+    except Exception as e:
+        import traceback
+        st.error(f"Year-End Setup error: {e}")
         st.code(traceback.format_exc())
 
 elif page == "fpnl":

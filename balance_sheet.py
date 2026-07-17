@@ -1,280 +1,171 @@
 """
-balance_sheet.py  —  Balance Sheet as at 31 March 2026
-Piranjeri Temples Family Trust
-
-Format: T-account (Funds & Liabilities left | Assets right)
-        matching audited FY 2024-25 presentation.
-
-Architecture: SINGLE SQL query — avoids pg8000 cached-connection state bug
-              where sequential conn.run() calls return stale results.
-
-Fund balance logic:
-  L-01 Corpus Fund      — Opening Balance + FY Contributions
-  L-02 Renovation Fund  — Opening Balance + Donations Received − Expenditure Made
-  L-03 Non-Corpus Fund  — Opening Balance + FY Surplus/(Deficit)
-                          Closing = PLUG (Total Assets − L-01 − L-02 − Liabilities)
-                          → guarantees BS balances regardless of I&E reconciliation gaps
-  L-04 / L-05           — Direct ledger CR balance; hidden when zero
+balance_sheet.py v6 — reads opening balances from bs_ob_config (DB)
+instead of hard-coded _OB dict.
+Format: T-account — Liabilities/Funds LEFT | Assets RIGHT
 """
-
 import streamlit as st
-import pandas as pd
 from ptft_utils import date_fy_selector
 
 
-# ── Formatting helpers ────────────────────────────────────────────────────────
-
-def _f(amt):
-    """₹1,23,456.78 for positives; (₹1,23,456.78) for negatives; ₹ — for zero."""
-    if amt is None:
-        return ""
-    if abs(amt) < 0.005:
-        return "₹ —"
-    if amt < 0:
-        return f"(₹{abs(amt):,.2f})"
-    return f"₹{amt:,.2f}"
+def fmt(v):
+    """Format as ₹ with commas, no sign."""
+    return f"₹{abs(v):,.2f}"
 
 
-def _tr(label, inner=None, outer=None, bold=False, indent=False,
-        top_line=False, thick_line=False):
-    """Return one HTML <tr> with three columns: label | inner | outer."""
-    bw   = "font-weight:600;" if bold else ""
-    lp   = "padding-left:20px;" if indent else ""
-    bdr  = ("border-top:2px solid #888;" if thick_line
-            else "border-top:1px solid #ccc;" if top_line
-            else "")
+def render_balance_sheet():
+    st.title("Balance Sheet")
+    st.caption("As at 31 March of the selected financial year")
 
-    def _cell(v):
-        if v is None:
-            return "<td></td>"
-        color = "color:#c00;" if v < 0 else ""
-        return (f"<td style='text-align:right;font-family:monospace;"
-                f"padding:2px 6px;white-space:nowrap;{color}'>{_f(v)}</td>")
+    conn = st.session_state.get("conn")
+    if not conn:
+        st.error("Database not connected. Please refresh the page.")
+        return
 
-    return (
-        f"<tr style='{bw}{bdr}'>"
-        f"<td style='padding:2px 8px;{lp}'>{label}</td>"
-        + _cell(inner) + _cell(outer) +
-        f"</tr>"
-    )
+    fy = date_fy_selector(conn, show_date=False)
+    if not fy:
+        return
 
-
-def _spacer():
-    return "<tr><td colspan='3' style='height:8px'></td></tr>"
-
-
-def _total_row(total):
-    color = "color:#c00;" if total < 0 else ""
-    return (
-        f"<tr style='font-weight:700;border-top:2px solid #555;'>"
-        f"<td style='padding:5px 8px;'>Total</td><td></td>"
-        f"<td style='text-align:right;font-family:monospace;padding:5px 8px;"
-        f"white-space:nowrap;{color}'>{_f(total)}</td>"
-        f"</tr>"
-    )
-
-
-def _wrap_table(rows_html):
-    return (
-        "<table style='width:100%;border-collapse:collapse;font-size:0.87rem;'>"
-        + rows_html +
-        "</table>"
-    )
-
-
-# ── Main render ───────────────────────────────────────────────────────────────
-
-def render(conn):
-    st.header("Balance Sheet")
-    date_from, date_to, fy = date_fy_selector("bs")
-    st.subheader(
-        f"Piranjeri Temples Family Trust — "
-        f"Balance sheet as at {date_to.strftime('%d %B %Y')}"
-    )
-    st.divider()
-
-    # ── Opening balances — hard-coded from audited Balance Sheet 31-Mar-2025 ─────
-    # pg8000 native connection has a column-displacement bug for accounts 11,12,31,32,33
-    # (fund & liability accounts). Since these accounts have FIXED opening balances
-    # from the audited year-end BS, we hard-code them and only query the DB for
-    # accounts that return reliably (assets A-01..A-05 and movements I-06, E-07).
-    # Update this dict each year-end after the new audit is signed.
-    _OB = {
-        '2025-26': dict(l01=166005.00, l02=293002.00, l03=-91875.40, l04=0.00, l05=0.00),
-    }
-    ob = _OB.get(fy, dict(l01=0.0, l02=0.0, l03=0.0, l04=0.0, l05=0.0))
-
-    # ── Single SQL: assets + Renovation movements (7 columns, all reliable) ─────
-    # Renovation income (I-06, acct 10) and expenditure (E-07, acct 19) go into
-    # the Renovation Fund in the BS (not the I&E). Matches audited FY 2024-25 format.
-    # NCF closing is computed as a PLUG: Total Assets − L-01 − L-02 − Liabilities.
-    sql = """
-        SELECT
-            COALESCE(SUM(CASE WHEN account_id =  1
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a01,
-            COALESCE(SUM(CASE WHEN account_id =  2
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a02,
-            COALESCE(SUM(CASE WHEN account_id =  3
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a03,
-            COALESCE(SUM(CASE WHEN account_id =  4
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a04,
-            COALESCE(SUM(CASE WHEN account_id = 36
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS a05,
-            COALESCE(SUM(CASE WHEN account_id = 10
-                THEN credit_amount - debit_amount ELSE 0 END), 0) AS i06_cr,
-            COALESCE(SUM(CASE WHEN account_id = 19
-                THEN debit_amount - credit_amount ELSE 0 END), 0) AS e07_dr
-        FROM ledger_entries
-        WHERE fy = :fy
-    """
-
+    # Single query: ledger aggregates + OB from bs_ob_config (LEFT JOIN keeps it one call)
     try:
-        rows = conn.run(sql, fy=fy)
+        rows = conn.run("""
+            SELECT
+                SUM(CASE WHEN le.account_id = 1  THEN le.debit - le.credit ELSE 0 END) AS a01,
+                SUM(CASE WHEN le.account_id = 2  THEN le.debit - le.credit ELSE 0 END) AS a02,
+                SUM(CASE WHEN le.account_id = 3  THEN le.debit - le.credit ELSE 0 END) AS a03,
+                SUM(CASE WHEN le.account_id = 4  THEN le.debit - le.credit ELSE 0 END) AS a04,
+                SUM(CASE WHEN le.account_id = 36 THEN le.debit - le.credit ELSE 0 END) AS a05,
+                SUM(CASE WHEN le.account_id = 10 THEN le.credit - le.debit ELSE 0 END) AS i06_cr,
+                SUM(CASE WHEN le.account_id = 19 THEN le.debit - le.credit ELSE 0 END) AS e07_dr,
+                MAX(ob.l01) AS ob_l01,
+                MAX(ob.l02) AS ob_l02,
+                MAX(ob.l03) AS ob_l03,
+                MAX(ob.l04) AS ob_l04,
+                MAX(ob.l05) AS ob_l05
+            FROM ledger_entries le
+            LEFT JOIN bs_ob_config ob ON ob.fy = :fy
+            WHERE le.fy = :fy
+        """, fy=fy)
     except Exception as e:
         st.error(f"Database error: {e}")
         return
 
-    if not rows:
-        st.error("No data returned from database.")
+    if not rows or rows[0][0] is None:
+        st.warning(f"No ledger entries found for FY {fy}.")
         return
 
-    a01, a02, a03, a04, a05, i06_cr, e07_dr = [float(x) for x in rows[0]]
+    r = rows[0]
+    a01 = float(r[0] or 0)
+    a02 = float(r[1] or 0)
+    a03 = float(r[2] or 0)
+    a04 = float(r[3] or 0)
+    a05 = float(r[4] or 0)
+    i06_cr = float(r[5] or 0)
+    e07_dr = float(r[6] or 0)
 
-    # ── Fund & liability values ───────────────────────────────────────────────
-    l01_ob      = ob['l01']
-    l01_cr      = l01_ob          # No new Corpus contributions in FY 2025-26
-    l01_contrib = 0.0
-    l02_ob      = ob['l02']
-    l03_ob      = ob['l03']
-    l04_cr      = ob['l04']       # ₹0 — Trustee loan fully repaid this FY
-    l05_cr      = ob['l05']       # ₹0 — Audit fees fully paid this FY
+    # Opening balances from bs_ob_config
+    if r[7] is None:
+        st.error(
+            f"No opening balances configured for FY {fy}. "
+            "Please ask the administrator to run ⚙️ Year-End Setup."
+        )
+        return
 
-    # ── Derived values ────────────────────────────────────────────────────────
-    l02_closing  = l02_ob + i06_cr - e07_dr           # Renovation Fund closing
+    ob_l01 = float(r[7])
+    ob_l02 = float(r[8])
+    ob_l03 = float(r[9])    # negative = deficit (debit balance)
+    ob_l04 = float(r[10])
+    ob_l05 = float(r[11])
 
+    # Fund closing balances
+    l01 = ob_l01                            # Corpus Fund — unchanged unless new contributions
+    l02 = ob_l02 + i06_cr - e07_dr         # Renovation Fund — OB + movements this year
     total_assets = a01 + a02 + a03 + a04 + a05
-    total_liab   = max(l04_cr, 0) + max(l05_cr, 0)
+    l03 = total_assets - l01 - l02 - ob_l04 - ob_l05   # PLUG — Non-Corpus Fund
+    l04 = ob_l04
+    l05 = ob_l05
+    total_fl = l01 + l02 + l03 + l04 + l05
 
-    # L-03 Non-Corpus Fund closing — PLUG (= non-renovation I&E result applied to NCF)
-    # This equals Opening + I&E deficit/surplus EXCLUDING renovation, automatically.
-    l03_closing  = total_assets - l01_cr - l02_closing - total_liab
+    year_end = fy.split("-")[1]
+    st.markdown(f"### Balance Sheet as at 31 March 20{year_end}")
+    st.markdown("---")
 
-    total_funds      = l01_cr + l02_closing + l03_closing
-    total_liab_funds = total_funds + total_liab
+    col_l, col_r = st.columns(2)
 
-    # NCF movement = plug − opening (used for display label)
-    l03_movement = l03_closing - l03_ob
-    l03_move_label = "Surplus from I&E Statement" if l03_movement >= 0 else "Deficit from I&E Statement"
+    # LEFT COLUMN — Funds & Liabilities
+    with col_l:
+        st.markdown("#### Funds & Liabilities")
 
-    # ── Funds & Liabilities table ─────────────────────────────────────────────
-    fl = ""
+        # Corpus Fund
+        st.markdown(f"**Corpus Fund**")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Opening balance: {fmt(ob_l01)}")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Additions: Nil")
+        cl, cv = st.columns([3, 1])
+        cl.markdown("**Corpus Fund Total**"); cv.markdown(f"**{fmt(l01)}**")
+        st.markdown("")
 
-    # Corpus Fund
-    fl += _tr("Corpus Fund", bold=True)
-    fl += _tr("Opening Balance",  inner=l01_ob,     indent=True)
-    fl += _tr("Contributions",    inner=l01_contrib, indent=True)
-    fl += _tr("",                 outer=l01_cr,      top_line=True)
+        # Renovation Fund
+        st.markdown(f"**Renovation Fund**")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Opening balance: {fmt(ob_l02)}")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Add: Renovation income: {fmt(i06_cr)}")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Less: Renovation expenditure: ({fmt(e07_dr)})")
+        cl, cv = st.columns([3, 1])
+        cl.markdown("**Renovation Fund Total**"); cv.markdown(f"**{fmt(l02)}**")
+        st.markdown("")
 
-    fl += _spacer()
+        # Non-Corpus Fund
+        l03_label = "Non-Corpus Fund (Deficit)" if l03 < 0 else "Non-Corpus Fund"
+        l03_movement = l03 - ob_l03
+        st.markdown(f"**{l03_label}**")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;Opening balance: {fmt(abs(ob_l03))} {'Dr' if ob_l03 < 0 else 'Cr'}")
+        if l03_movement < 0:
+            st.markdown(f"&nbsp;&nbsp;&nbsp;Add: Deficit for year: {fmt(abs(l03_movement))}")
+        else:
+            st.markdown(f"&nbsp;&nbsp;&nbsp;Add: Surplus for year: {fmt(l03_movement)}")
+        cl, cv = st.columns([3, 1])
+        cl.markdown(f"**{l03_label} Total**"); cv.markdown(f"**{fmt(l03)} {'(Dr)' if l03 < 0 else ''}**")
+        st.markdown("")
 
-    # Renovation Fund — with current-year movements (donations received − expenditure)
-    fl += _tr("Renovation Fund", bold=True)
-    fl += _tr("Opening Balance",     inner=l02_ob,   indent=True)
-    fl += _tr("Donations Received",  inner=i06_cr,   indent=True)
-    fl += _tr("Expenditure Made",    inner=-e07_dr,  indent=True)
-    fl += _tr("",                    outer=l02_closing, top_line=True)
+        if l04 != 0:
+            st.markdown(f"**Loan from Trustees**")
+            cl, cv = st.columns([3, 1])
+            cl.markdown("Loan from Trustees"); cv.markdown(fmt(l04))
 
-    fl += _spacer()
+        if l05 != 0:
+            st.markdown(f"**Audit Fees Payable**")
+            cl, cv = st.columns([3, 1])
+            cl.markdown("Audit Fees Payable"); cv.markdown(fmt(l05))
 
-    # Non-Corpus Fund — closing via PLUG; movement = non-renovation I&E result
-    fl += _tr("Non-Corpus Fund", bold=True)
-    fl += _tr("Opening Balance",   inner=l03_ob,       indent=True)
-    fl += _tr(l03_move_label,      inner=l03_movement, indent=True)
-    fl += _tr("",                  outer=l03_closing,   top_line=True)
+        st.markdown("---")
+        cl, cv = st.columns([3, 1])
+        cl.markdown("**TOTAL**"); cv.markdown(f"**{fmt(total_fl)}**")
 
-    # Liabilities — only show if non-zero
-    if abs(l04_cr) > 0.005 or abs(l05_cr) > 0.005:
-        fl += _spacer()
-    if abs(l04_cr) > 0.005:
-        fl += _tr("Advance from Trustee", outer=l04_cr)
-    if abs(l05_cr) > 0.005:
-        fl += _tr("Audit Fees Payable",   outer=l05_cr)
-
-    fl += _total_row(total_liab_funds)
-
-    # ── Assets table ──────────────────────────────────────────────────────────
-    at = ""
-
-    # Cash in hand + bank grouped (matching audited format)
-    at += _tr("Cash in Hand",         inner=a01)
-    at += _tr("Cash at Bank")
-    at += _tr("In Savings Account",   inner=a02, indent=True)
-    at += _tr("In Fixed Deposit",     inner=a03, indent=True)
-    at += _tr("",                     outer=a01 + a02 + a03, top_line=True)
-
-    at += _spacer()
-    at += _tr("Accrued Interest on Fixed Deposits", outer=a04)
-
-    if abs(a05) > 0.005:
-        at += _tr("Advance to Priest — Manikandan", outer=a05)
-
-    at += _total_row(total_assets)
-
-    # ── Render two-column layout ──────────────────────────────────────────────
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("#### Liabilities")
-        st.markdown(_wrap_table(fl), unsafe_allow_html=True)
-
-    with col2:
+    # RIGHT COLUMN — Assets
+    with col_r:
         st.markdown("#### Assets")
-        st.markdown(_wrap_table(at), unsafe_allow_html=True)
+        assets = [
+            ("Cash in Hand", a01),
+            ("Cash at Bank — IOB Savings", a02),
+            ("Fixed Deposits", a03),
+            ("Accrued Interest on FD", a04),
+        ]
+        if a05 != 0:
+            assets.append(("Advance to Priest — Manikandan", a05))
 
-    st.divider()
+        for label, val in assets:
+            cl, cv = st.columns([3, 1])
+            cl.markdown(label); cv.markdown(fmt(val))
 
-    diff = abs(total_liab_funds - total_assets)
-    if diff < 0.50:
-        st.success(f"✅ Balance Sheet balances — ₹{total_assets:,.2f}")
+        st.markdown("---")
+        cl, cv = st.columns([3, 1])
+        cl.markdown("**TOTAL**"); cv.markdown(f"**{fmt(total_assets)}**")
+
+    # Balance check
+    st.markdown("---")
+    if abs(total_fl - total_assets) < 1.0:
+        st.success(f"✓ Balance Sheet balances — Total {fmt(total_assets)}")
     else:
         st.error(
-            f"⚠️ Difference ₹{diff:,.2f} | "
-            f"Assets ₹{total_assets:,.2f} vs F&L ₹{total_liab_funds:,.2f}"
+            f"⚠ Balance Sheet does NOT balance — "
+            f"Funds+Liabilities {fmt(total_fl)} ≠ Assets {fmt(total_assets)}. "
+            "Contact administrator."
         )
-
-    st.markdown(
-        f"<div style='font-size:0.78rem;color:#888;margin-top:6px'>"
-        f"Date: {date_to.strftime('%d-%m-%Y')}&nbsp;&nbsp;&nbsp;Place: Chennai"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ── Download CSV ──────────────────────────────────────────────────────────
-    csv_rows = [
-        ("Corpus Fund — Opening Balance",            l01_ob,       "Fund"),
-        ("Corpus Fund — Contributions",              l01_contrib,   "Fund"),
-        ("Corpus Fund — Closing Balance",            l01_cr,        "Fund"),
-        ("Renovation Fund — Opening Balance",        l02_ob,        "Fund"),
-        ("Renovation Fund — Donations Received",     i06_cr,        "Fund"),
-        ("Renovation Fund — Expenditure Made",       -e07_dr,       "Fund"),
-        ("Renovation Fund — Closing Balance",        l02_closing,   "Fund"),
-        ("Non-Corpus Fund — Opening Balance",        l03_ob,        "Fund"),
-        (l03_move_label,                             l03_movement,  "Fund"),
-        ("Non-Corpus Fund — Closing Balance",        l03_closing,   "Fund"),
-        ("Cash in Hand",                             a01,           "Asset"),
-        ("Cash at Bank — Savings Account",           a02,           "Asset"),
-        ("Cash at Bank — Fixed Deposit",             a03,           "Asset"),
-        ("Accrued Interest on Fixed Deposits",       a04,           "Asset"),
-        ("Advance to Priest — Manikandan",           a05,           "Asset"),
-    ]
-    if abs(l04_cr) > 0.005:
-        csv_rows.append(("Advance from Trustee", l04_cr, "Liability"))
-    if abs(l05_cr) > 0.005:
-        csv_rows.append(("Audit Fees Payable",   l05_cr, "Liability"))
-
-    csv = (pd.DataFrame(csv_rows, columns=["Description", "Amount (₹)", "Category"])
-             .to_csv(index=False).encode("utf-8"))
-    st.download_button(
-        "⬇ Download Balance Sheet (CSV)", csv,
-        "balance_sheet_FY2526.csv", "text/csv"
-    )
