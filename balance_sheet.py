@@ -21,7 +21,7 @@ def render_balance_sheet():
         st.error("Database not connected. Please refresh the page.")
         return
 
-    fy = date_fy_selector(conn, show_date=False)
+    fy = date_fy_selector(conn)
     if not fy:
         return
 
