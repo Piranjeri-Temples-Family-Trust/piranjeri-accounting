@@ -72,14 +72,13 @@ def render(conn):
                     "SELECT entry_date, narration, credit_amount "
                     "FROM ledger_entries "
                     "WHERE fy = :fy AND account_id = :aid AND credit_amount > 0 "
-                    "ORDER BY entry_date LIMIT 5",
+                    "ORDER BY entry_date",
                     fy=fy, aid=inc_id,
                 )
                 if inc_rows:
                     idf = pd.DataFrame(inc_rows, columns=["Date", "Narration", "Amount"])
                     idf["Amount"] = idf["Amount"].astype(float).apply(lambda x: f"₹{x:,.2f}")
                     st.dataframe(idf, hide_index=True, use_container_width=True)
-                    st.caption("(Showing first 5 entries)")
             except Exception as e:
                 st.caption(f"Could not load detail: {e}")
 
