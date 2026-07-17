@@ -34,6 +34,11 @@ div[data-testid="stSidebar"] .stButton > button {
     border-radius: 6px;
     margin-bottom: 2px;
 }
+div[data-testid="stSidebar"] .stButton > button p,
+div[data-testid="stSidebar"] .stButton > button span,
+div[data-testid="stSidebar"] .stButton > button div {
+    color: #4A90D9 !important;
+}
 div[data-testid="stSidebar"] .stButton > button:hover {
     background: rgba(74,144,217,0.12);
 }
