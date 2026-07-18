@@ -198,6 +198,7 @@ with st.sidebar:
     nav_btn("📖  Journal Book", "journal_book")
     nav_btn("🏦  Bank Statement", "bank_statement")
     nav_btn("🔧  Edit / Void", "edit_void")
+    nav_btn("🗂️  Manage Categories", "manage_heads")
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
@@ -362,4 +363,13 @@ elif page == "edit_void":
     except Exception as e:
         import traceback
         st.error(f"Edit/Void error: {e}")
+        st.code(traceback.format_exc())
+
+elif page == "manage_heads":
+    try:
+        from manage_heads import render_manage_heads
+        render_manage_heads(st.session_state.user)
+    except Exception as e:
+        import traceback
+        st.error(f"Manage Categories error: {e}")
         st.code(traceback.format_exc())
