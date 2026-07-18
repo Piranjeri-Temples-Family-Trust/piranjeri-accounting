@@ -760,19 +760,27 @@ def render_expense_entry(user: str):
                 if errs:
                     for e in errs: st.error(e)
                 else:
-                    try:
-                        nid = _save_expense({
-                            "txn_date": je_date, "fy": _fy(je_date),
-                            "fund_source_id": xe_fs, "festival_id": xe_fest,
-                            "major_head_id": xe_mh_id, "amount": float(je_amt),
-                            "payment_mode": xe_mode, "cheque_no": xe_chq,
-                            "utr_ref_no": xe_utr, "description": xe_desc,
-                            "paid_to": xe_paid, "entered_by": user
-                        })
-                        st.success(f"✅ Expense #{nid} · ₹{je_amt:,.2f} · {acct_labels[je_acct]}")
-                        st.cache_data.clear(); st.rerun()
-                    except Exception as ex:
-                        st.error(f"Save failed: {ex}")
+                    # ── FY guard: FY 2025-26 and earlier entries must go via DB ──
+                    _entry_fy = _fy(je_date)
+                    if _entry_fy <= "2025-26":
+                        st.error(
+                            f"⛔ Expenses for FY {_entry_fy} cannot be posted through the app. "
+                            "All corrections for FY 2025-26 must be made directly in the database."
+                        )
+                    else:
+                        try:
+                            nid = _save_expense({
+                                "txn_date": je_date, "fy": _entry_fy,
+                                "fund_source_id": xe_fs, "festival_id": xe_fest,
+                                "major_head_id": xe_mh_id, "amount": float(je_amt),
+                                "payment_mode": xe_mode, "cheque_no": xe_chq,
+                                "utr_ref_no": xe_utr, "description": xe_desc,
+                                "paid_to": xe_paid, "entered_by": user
+                            })
+                            st.success(f"✅ Expense #{nid} · ₹{je_amt:,.2f} · {acct_labels[je_acct]}")
+                            st.cache_data.clear(); st.rerun()
+                        except Exception as ex:
+                            st.error(f"Save failed: {ex}")
 
         # ── INCOME path ────────────────────────────────────────────────────────
         elif route_income:
