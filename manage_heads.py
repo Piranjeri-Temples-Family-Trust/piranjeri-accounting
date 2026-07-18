@@ -8,12 +8,8 @@ Allows any logged-in trustee to:
   - Edit the name / description of existing heads
   - Deactivate (soft-delete) or Reactivate heads
 
-All changes are stored in the `major_heads` table on Neon PostgreSQL.
-The is_active flag controls whether the head appears in the expense-entry
-dropdown. Deactivating a head does NOT affect past expense records.
-
-pg8000 note: ALL data for this page is fetched in a SINGLE conn.run()
-call to avoid the connection-state / result-buffer bug.
+Uses pg8000.native API (conn.run / conn.run("COMMIT")) — same connection
+as the rest of the app (st.session_state.conn).
 """
 
 import streamlit as st
@@ -21,33 +17,22 @@ from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers — pg8000.native style
 # ---------------------------------------------------------------------------
 
-def _cursor(conn):
-    """Return a fresh cursor from the shared pg8000 connection."""
-    return conn.cursor()
-
-
 def _get_conn():
-    """Retrieve the pg8000 connection cached in session state."""
     return st.session_state.get("conn")
 
 
 def _load_all_heads(conn):
     """
-    Fetch every major head row in one query.
-    Returns list of dicts with keys: id, code, name, description, is_active.
+    Fetch every major head row in one conn.run() call.
+    Returns list of dicts: id, code, name, description, is_active.
     """
-    with _cursor(conn) as cur:
-        cur.execute(
-            """
-            SELECT id, code, name, description, is_active
-            FROM   major_heads
-            ORDER  BY code
-            """
-        )
-        rows = cur.fetchall()
+    rows = conn.run(
+        "SELECT id, code, name, description, is_active "
+        "FROM major_heads ORDER BY code"
+    )
     return [
         {
             "id":          r[0],
@@ -61,11 +46,8 @@ def _load_all_heads(conn):
 
 
 def _next_code(heads):
-    """
-    Suggest the next available E-xx code by finding the highest numeric suffix
-    among existing heads.
-    """
-    max_n = 18   # start after the 18 shipped heads
+    """Suggest next E-xx code beyond the highest existing numeric suffix."""
+    max_n = 18
     for h in heads:
         try:
             n = int(h["code"].split("-")[1])
@@ -81,7 +63,6 @@ def _next_code(heads):
 # ---------------------------------------------------------------------------
 
 def _tab_add(conn, heads):
-    """Tab 1 — Add a new major head."""
     st.subheader("Add New Expense Category")
     st.caption(
         "Create a new expense category (e.g. E-19 Generator Fuel). "
@@ -119,7 +100,6 @@ def _tab_add(conn, heads):
         new_code = new_code.strip().upper()
         new_name = new_name.strip()
 
-        # Validate
         errors = []
         if not new_code:
             errors.append("Category Code is required.")
@@ -133,27 +113,28 @@ def _tab_add(conn, heads):
                 st.error(e)
         else:
             try:
-                with _cursor(conn) as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO major_heads (code, name, description, is_active)
-                        VALUES (%s, %s, %s, TRUE)
-                        """,
-                        (new_code, new_name, new_desc.strip() or None),
-                    )
-                conn.commit()
+                conn.run(
+                    "INSERT INTO major_heads (code, name, description, is_active) "
+                    "VALUES (:code, :name, :desc, TRUE)",
+                    code=new_code,
+                    name=new_name,
+                    desc=new_desc.strip() or None,
+                )
+                conn.run("COMMIT")
                 st.success(
                     f"Category **{new_code} — {new_name}** added successfully! "
                     "It is now available in the expense entry form."
                 )
                 st.rerun()
             except Exception as ex:
-                conn.rollback()
+                try:
+                    conn.run("ROLLBACK")
+                except Exception:
+                    pass
                 st.error(f"Database error: {ex}")
 
 
 def _tab_edit(conn, heads):
-    """Tab 2 — Edit name / description of an existing head."""
     st.subheader("Edit Expense Category")
     st.caption("Update the name or description of an existing category.")
 
@@ -162,28 +143,14 @@ def _tab_edit(conn, heads):
         return
 
     options = [f"{h['code']} — {h['name']}" for h in heads]
-    choice = st.selectbox(
-        "Select Category to Edit",
-        options=options,
-        key="mh_edit_select",
-    )
+    choice = st.selectbox("Select Category to Edit", options=options, key="mh_edit_select")
     idx = options.index(choice)
     selected = heads[idx]
 
     with st.form("edit_head_form"):
         st.write(f"**Code:** {selected['code']}  *(code cannot be changed)*")
-
-        edited_name = st.text_input(
-            "Category Name *",
-            value=selected["name"],
-            max_chars=100,
-        )
-        edited_desc = st.text_input(
-            "Description",
-            value=selected["description"],
-            max_chars=255,
-        )
-
+        edited_name = st.text_input("Category Name *", value=selected["name"], max_chars=100)
+        edited_desc = st.text_input("Description", value=selected["description"], max_chars=255)
         save_btn = st.form_submit_button("Save Changes", type="primary")
 
     if save_btn:
@@ -192,29 +159,24 @@ def _tab_edit(conn, heads):
             st.error("Category Name cannot be empty.")
         else:
             try:
-                with _cursor(conn) as cur:
-                    cur.execute(
-                        """
-                        UPDATE major_heads
-                        SET    name        = %s,
-                               description = %s
-                        WHERE  id          = %s
-                        """,
-                        (edited_name, edited_desc.strip() or None, selected["id"]),
-                    )
-                conn.commit()
-                st.success(
-                    f"Category **{selected['code']}** updated to "
-                    f"**{edited_name}**."
+                conn.run(
+                    "UPDATE major_heads SET name = :name, description = :desc WHERE id = :id",
+                    name=edited_name,
+                    desc=edited_desc.strip() or None,
+                    id=selected["id"],
                 )
+                conn.run("COMMIT")
+                st.success(f"Category **{selected['code']}** updated to **{edited_name}**.")
                 st.rerun()
             except Exception as ex:
-                conn.rollback()
+                try:
+                    conn.run("ROLLBACK")
+                except Exception:
+                    pass
                 st.error(f"Database error: {ex}")
 
 
 def _tab_deactivate(conn, heads):
-    """Tab 3 — Deactivate or Reactivate a major head (soft toggle)."""
     st.subheader("Deactivate / Reactivate Category")
     st.caption(
         "Deactivating hides a category from the expense-entry dropdown. "
@@ -234,35 +196,28 @@ def _tab_deactivate(conn, heads):
         st.info("All categories are currently active.")
     else:
         active_opts = [f"{h['code']} — {h['name']}" for h in active_heads]
-        deact_choice = st.selectbox(
-            "Select category to deactivate",
-            options=active_opts,
-            key="mh_deact_select",
-        )
-        deact_idx = active_opts.index(deact_choice)
-        deact_head = active_heads[deact_idx]
+        deact_choice = st.selectbox("Select category to deactivate", options=active_opts, key="mh_deact_select")
+        deact_head = active_heads[active_opts.index(deact_choice)]
 
         st.warning(
             f"Deactivating **{deact_head['code']} — {deact_head['name']}** will "
-            "remove it from the expense-entry dropdown. Existing expense records "
-            "using this category are unchanged."
+            "remove it from the expense-entry dropdown. Existing records using this category are unchanged."
         )
 
         if st.button("Deactivate Category", key="mh_deact_btn"):
             try:
-                with _cursor(conn) as cur:
-                    cur.execute(
-                        "UPDATE major_heads SET is_active = FALSE WHERE id = %s",
-                        (deact_head["id"],),
-                    )
-                conn.commit()
-                st.success(
-                    f"Category **{deact_head['code']} — {deact_head['name']}** "
-                    "has been deactivated."
+                conn.run(
+                    "UPDATE major_heads SET is_active = FALSE WHERE id = :id",
+                    id=deact_head["id"],
                 )
+                conn.run("COMMIT")
+                st.success(f"Category **{deact_head['code']} — {deact_head['name']}** deactivated.")
                 st.rerun()
             except Exception as ex:
-                conn.rollback()
+                try:
+                    conn.run("ROLLBACK")
+                except Exception:
+                    pass
                 st.error(f"Database error: {ex}")
 
     st.divider()
@@ -273,48 +228,39 @@ def _tab_deactivate(conn, heads):
         st.info("No deactivated categories.")
     else:
         inactive_opts = [f"{h['code']} — {h['name']}" for h in inactive_heads]
-        react_choice = st.selectbox(
-            "Select category to reactivate",
-            options=inactive_opts,
-            key="mh_react_select",
-        )
-        react_idx = inactive_opts.index(react_choice)
-        react_head = inactive_heads[react_idx]
+        react_choice = st.selectbox("Select category to reactivate", options=inactive_opts, key="mh_react_select")
+        react_head = inactive_heads[inactive_opts.index(react_choice)]
 
         if st.button("Reactivate Category", type="primary", key="mh_react_btn"):
             try:
-                with _cursor(conn) as cur:
-                    cur.execute(
-                        "UPDATE major_heads SET is_active = TRUE WHERE id = %s",
-                        (react_head["id"],),
-                    )
-                conn.commit()
-                st.success(
-                    f"Category **{react_head['code']} — {react_head['name']}** "
-                    "is now active and will appear in the expense-entry dropdown."
+                conn.run(
+                    "UPDATE major_heads SET is_active = TRUE WHERE id = :id",
+                    id=react_head["id"],
                 )
+                conn.run("COMMIT")
+                st.success(f"Category **{react_head['code']} — {react_head['name']}** reactivated.")
                 st.rerun()
             except Exception as ex:
-                conn.rollback()
+                try:
+                    conn.run("ROLLBACK")
+                except Exception:
+                    pass
                 st.error(f"Database error: {ex}")
 
 
 # ---------------------------------------------------------------------------
-# Current heads overview table
+# Current heads overview
 # ---------------------------------------------------------------------------
 
 def _show_heads_table(heads):
-    """Render a compact summary table of all heads."""
     if not heads:
         return
-
     with st.expander("All Categories (click to expand)", expanded=False):
         col_h = st.columns([1, 3, 4, 1])
         col_h[0].markdown("**Code**")
         col_h[1].markdown("**Name**")
         col_h[2].markdown("**Description**")
         col_h[3].markdown("**Active**")
-
         for h in heads:
             cols = st.columns([1, 3, 4, 1])
             cols[0].write(h["code"])
@@ -324,23 +270,12 @@ def _show_heads_table(heads):
 
 
 # ---------------------------------------------------------------------------
-# Main entry point (called from app_accounting.py)
+# Main entry point
 # ---------------------------------------------------------------------------
 
 def render_manage_heads(user):
-    """
-    Render the Manage Expense Categories page.
-
-    Parameters
-    ----------
-    user : str
-        Username of the currently logged-in trustee.
-    """
     st.title("Manage Expense Categories")
-    st.caption(
-        f"Logged in as **{user}** — "
-        + datetime.now().strftime("%d %b %Y, %H:%M")
-    )
+    st.caption(f"Logged in as **{user}** — {datetime.now().strftime('%d %b %Y, %H:%M')}")
     st.markdown(
         "Use this page to add new expense categories, rename existing ones, "
         "or deactivate categories that are no longer needed. "
@@ -352,14 +287,12 @@ def render_manage_heads(user):
         st.error("Database connection not available. Please log out and log in again.")
         return
 
-    # Load all heads in one query
     try:
         heads = _load_all_heads(conn)
     except Exception as ex:
         st.error(f"Failed to load categories: {ex}")
         return
 
-    # Summary
     active_count   = sum(1 for h in heads if h["is_active"])
     inactive_count = len(heads) - active_count
     c1, c2, c3 = st.columns(3)
@@ -368,12 +301,9 @@ def render_manage_heads(user):
     c3.metric("Inactive", inactive_count)
 
     st.divider()
-
     _show_heads_table(heads)
-
     st.divider()
 
-    # Action tabs
     tab_add, tab_edit, tab_deact = st.tabs(
         ["Add New Category", "Edit Category", "Deactivate / Reactivate"]
     )
