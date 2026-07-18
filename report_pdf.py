@@ -489,13 +489,16 @@ def balance_sheet_pdf(fy, data):
         left += [("BLANK","",None), ("ITEM","Audit Fees Payable", None), ("ITEM","", l05)]
     left += [("BLANK","",None), ("TOTAL","TOTAL", total_fl)]
 
-    # RIGHT — Assets
+    # RIGHT — Assets (matching app layout)
     right = [("HDR", "Assets", None)]
     right += [
-        ("ITEM", "Cash in Hand",                   a01),
-        ("ITEM", "Cash at Bank — IOB Savings",      a02),
-        ("ITEM", "Fixed Deposits",                  a03),
-        ("ITEM", "Accrued Interest on FD",          a04),
+        ("ITEM", "Cash in Hand",                       a01),
+        ("ITEM", "Cash at Bank",                       None),
+        ("ITEM", "  In savings account",               a02),
+        ("ITEM", "  In fixed deposit",                 a03),
+        ("BOLD", "  Total Cash & Bank",                a01 + a02 + a03),
+        ("BLANK", "", None),
+        ("ITEM", "Accrued Interest on Fixed Deposits", a04),
     ]
     if a05 != 0:
         right.append(("ITEM", "Advance to Priest — Manikandan", a05))

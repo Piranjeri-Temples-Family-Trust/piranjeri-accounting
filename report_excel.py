@@ -494,13 +494,31 @@ def balance_sheet_xlsx(fy, data):
     total_l(r, "TOTAL", total_fl)
     left_end = r
 
-    # RIGHT SIDE — Assets
+    # RIGHT SIDE — Assets (matching app layout)
     r = start_r
+    cash_subtotal = a01 + a02 + a03
     hdr_r(r, "Assets"); r += 1
-    wr(r, "Cash in Hand",                  a01); r += 1
-    wr(r, "Cash at Bank — IOB Savings",    a02); r += 1
-    wr(r, "Fixed Deposits",                a03); r += 1
-    wr(r, "Accrued Interest on FD",        a04); r += 1
+    wr(r, "Cash in Hand",              a01); r += 1
+    wr(r, "Cash at Bank",              bold=True); r += 1
+    wr(r, "  In savings account",      a02); r += 1
+    wr(r, "  In fixed deposit",        a03); r += 1
+    # Sub-total row with top border
+    c_lbl = ws.cell(r, 3, "  Total Cash & Bank")
+    c_lbl.font = _font(bold=True, size=9); c_lbl.alignment = _align()
+    c_lbl.border = Border(top=Side(style="thin", color=BLUE_HEX),
+                          left=Side(style="thin", color=MGREY_HEX),
+                          right=Side(style="thin", color=MGREY_HEX),
+                          bottom=Side(style="thin", color=MGREY_HEX))
+    c_amt = ws.cell(r, 4, cash_subtotal)
+    c_amt.font = _font(bold=True, size=9); c_amt.number_format = MONEY
+    c_amt.alignment = _align("right")
+    c_amt.border = Border(top=Side(style="thin", color=BLUE_HEX),
+                          left=Side(style="thin", color=MGREY_HEX),
+                          right=Side(style="thin", color=MGREY_HEX),
+                          bottom=Side(style="thin", color=MGREY_HEX))
+    ws.row_dimensions[r].height = 14; r += 1
+    ws.row_dimensions[r].height = 5; r += 1
+    wr(r, "Accrued Interest on Fixed Deposits", a04); r += 1
     if a05 != 0:
         wr(r, "Advance to Priest — Manikandan", a05); r += 1
 
